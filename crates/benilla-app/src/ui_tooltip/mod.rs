@@ -16,6 +16,8 @@ use crate::target::{
     go_is_nearest, ring_reaction, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC,
 };
 use crate::ui_action::{PlayerActions, Spells};
+use crate::ui_script::UiFeed;
+use crate::ui_trainer::{TrainerFeed, TrainerTooltipSubjects};
 use crate::ui_unit::{enrich_unit, snapshot, UnitFeed};
 
 pub struct UiTooltipPlugin;
@@ -26,7 +28,9 @@ impl Plugin for UiTooltipPlugin {
             Update,
             (
                 drive_mouseover_tooltip.in_set(UnitFeed),
-                feed_spell_tooltips.in_set(UnitFeed),
+                // Consume a newly-opened trainer's derived subjects in the same frame, before
+                // UiInput can fire the detail icon's first OnEnter.
+                feed_spell_tooltips.in_set(UiFeed).after(TrainerFeed),
             ),
         );
     }
@@ -317,13 +321,24 @@ struct SpellFeedMemory {
     reagents: std::collections::BTreeMap<u32, (u32, bool)>,
 }
 
+/// The catalog-backed spell sources consumed by the tooltip feed. Keeping these related resources
+/// together stays under Bevy's system-parameter limit without making the system signature opaque to
+/// Clippy's type-complexity lint.
+#[derive(bevy::ecs::system::SystemParam)]
+struct SpellTooltipSources<'w> {
+    spells: Option<Res<'w, Spells>>,
+    trainer_subjects: Option<Res<'w, TrainerTooltipSubjects>>,
+    talents: Option<Res<'w, crate::ui_talent::Talents>>,
+}
+
 /// Push a view for every spell the UI can hover (the book, the class's talent ranks, the auras)
 /// before it is hovered, as the reference reads them all locally; an ask for any other id too.
 fn feed_spell_tooltips(
     script: Option<NonSendMut<UiScript>>,
     actions: Option<Res<PlayerActions>>,
-    spells: Option<Res<Spells>>,
-    talents: Option<Res<crate::ui_talent::Talents>>,
+    // The catalog-backed sources whose spells may be hovered. Bundling them keeps this already-wide
+    // feed under Bevy's 16-SystemParam ceiling.
+    spell_sources: SpellTooltipSources,
     auras: Option<Res<crate::ui_aura::PlayerAuraCache>>,
     selection: Res<crate::target::Selection>,
     stores: Query<&ObjectStore>,
@@ -343,6 +358,11 @@ fn feed_spell_tooltips(
     mut memory: Local<crate::ui_script::VmMemo<SpellFeedMemory>>,
 ) {
     let (sub_classes, spell_mods) = &lookups;
+    let SpellTooltipSources {
+        spells,
+        trainer_subjects,
+        talents,
+    } = spell_sources;
     let Some(mut script) = script else {
         return;
     };
@@ -358,6 +378,18 @@ fn feed_spell_tooltips(
                 .iter()
                 .copied()
                 .filter(|s| !memory.pushed.contains(s)),
+        );
+    }
+    // The trainer detail icon's stock `OnEnter` calls `SetTrainerService` directly. Its spell
+    // view must already be local on that first entry; otherwise the hover only records an ask and
+    // the next entry is the first one that can render it.
+    if let Some(trainer_subjects) = trainer_subjects.as_deref() {
+        wanted.extend(
+            trainer_subjects
+                .0
+                .iter()
+                .copied()
+                .filter(|spell_id| !memory.pushed.contains(spell_id)),
         );
     }
     // Every rank of the class's talents: a talent tooltip reads the current and the next rank.

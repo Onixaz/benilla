@@ -11,7 +11,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{
     ScriptValue, TrainerAbilityReq, TrainerService, TrainerServiceCategory, TrainerSkillReq,
-    TrainerState, UiScript,
+    TrainerState, TrainerTooltip, UiScript,
 };
 
 use crate::entities::ItemDisplays;
@@ -99,6 +99,15 @@ impl TrainerOpen {
 #[derive(Resource, Default)]
 pub(crate) struct TrainerErrors(pub Vec<u32>);
 
+/// Spell-tooltip subjects resolved from the open trainer's services. The tooltip feed consumes
+/// this derived view; the network-facing [`TrainerOpen`] remains the packet's raw service list.
+#[derive(Resource, Default)]
+pub(crate) struct TrainerTooltipSubjects(pub(crate) Vec<u32>);
+
+/// The trainer snapshot + derived-subject feed, used to order tooltip prefetch before UI input.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TrainerFeed;
+
 mod net;
 mod reeval;
 
@@ -109,6 +118,7 @@ impl Plugin for UiTrainerPlugin {
         net::register(app);
         app.init_resource::<TrainerOpen>()
             .init_resource::<TrainerErrors>()
+            .init_resource::<TrainerTooltipSubjects>()
             .add_systems(
                 Update,
                 (
@@ -116,7 +126,10 @@ impl Plugin for UiTrainerPlugin {
                     close_npc_session_out_of_range::<TrainerOpen>.before(feed_trainer),
                     // The unit feeds also write the pet bar the re-evaluator reads; either order
                     // reads the same pet spellbook, but the schedule check wants one declared.
-                    feed_trainer.in_set(UiFeed).after(crate::ui_unit::UnitFeed),
+                    feed_trainer
+                        .in_set(UiFeed)
+                        .in_set(TrainerFeed)
+                        .after(crate::ui_unit::UnitFeed),
                     drain_trainer.after(UiInput),
                 ),
             );
@@ -289,6 +302,7 @@ fn feed_trainer(
     mut errors: ResMut<TrainerErrors>,
     commands: Res<NetCommands>,
     names: Res<NameCache>,
+    mut tooltip_subjects: ResMut<TrainerTooltipSubjects>,
     mut last: Local<crate::ui_script::VmMemo<Option<TrainerState>>>,
     mut last_trainer: Local<crate::ui_script::VmMemo<Option<u64>>>,
     mut last_name: Local<crate::ui_script::VmMemo<Option<String>>>,
@@ -416,6 +430,19 @@ fn feed_trainer(
                 .filter(|t| !t.is_empty())
         },
     );
+    let mut fresh_tooltip_subjects: Vec<u32> = fresh
+        .iter()
+        .flat_map(|state| &state.services)
+        .filter_map(|service| match &service.tooltip {
+            TrainerTooltip::Spell { spell_id, .. } => Some(*spell_id),
+            TrainerTooltip::Item(_) => None,
+        })
+        .collect();
+    fresh_tooltip_subjects.sort_unstable();
+    fresh_tooltip_subjects.dedup();
+    if tooltip_subjects.0 != fresh_tooltip_subjects {
+        tooltip_subjects.0 = fresh_tooltip_subjects;
+    }
     // A name-only change re-fires `TRAINER_UPDATE`, so the title's `UnitName("npc")` repaints.
     // The name rides as arg1, which the 1.12 trainer events do not carry.
     let trainer_name = open
