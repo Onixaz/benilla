@@ -28,9 +28,12 @@ impl Plugin for UiTooltipPlugin {
             Update,
             (
                 drive_mouseover_tooltip.in_set(UnitFeed),
-                // Consume a newly-opened trainer's derived subjects in the same frame, before
-                // UiInput can fire the detail icon's first OnEnter.
-                feed_spell_tooltips.in_set(UiFeed).after(TrainerFeed),
+                // After the trainer feed, so a list that lands this frame is hoverable in its tick;
+                // outside `UnitFeed`, which the trainer feed follows, so it takes that set's gate.
+                feed_spell_tooltips
+                    .in_set(UiFeed)
+                    .after(TrainerFeed)
+                    .run_if(crate::ui_script::ingame_ui_up),
             ),
         );
     }
@@ -321,9 +324,7 @@ struct SpellFeedMemory {
     reagents: std::collections::BTreeMap<u32, (u32, bool)>,
 }
 
-/// The catalog-backed spell sources consumed by the tooltip feed. Keeping these related resources
-/// together stays under Bevy's system-parameter limit without making the system signature opaque to
-/// Clippy's type-complexity lint.
+/// The hoverable spell sources [`feed_spell_tooltips`] reads, one parameter under Bevy's 16.
 #[derive(bevy::ecs::system::SystemParam)]
 struct SpellTooltipSources<'w> {
     spells: Option<Res<'w, Spells>>,
@@ -331,13 +332,12 @@ struct SpellTooltipSources<'w> {
     talents: Option<Res<'w, crate::ui_talent::Talents>>,
 }
 
-/// Push a view for every spell the UI can hover (the book, the class's talent ranks, the auras)
-/// before it is hovered, as the reference reads them all locally; an ask for any other id too.
+/// Push a view for every spell the UI can hover (the book, the class's talent ranks, the open
+/// trainer's services, the auras) before it is hovered, as the reference reads them all locally;
+/// an ask for any other id too.
 fn feed_spell_tooltips(
     script: Option<NonSendMut<UiScript>>,
     actions: Option<Res<PlayerActions>>,
-    // The catalog-backed sources whose spells may be hovered. Bundling them keeps this already-wide
-    // feed under Bevy's 16-SystemParam ceiling.
     spell_sources: SpellTooltipSources,
     auras: Option<Res<crate::ui_aura::PlayerAuraCache>>,
     selection: Res<crate::target::Selection>,
@@ -380,16 +380,14 @@ fn feed_spell_tooltips(
                 .filter(|s| !memory.pushed.contains(s)),
         );
     }
-    // The trainer detail icon's stock `OnEnter` calls `SetTrainerService` directly. Its spell
-    // view must already be local on that first entry; otherwise the hover only records an ask and
-    // the next entry is the first one that can render it.
-    if let Some(trainer_subjects) = trainer_subjects.as_deref() {
+    // The open trainer's services, which the detail icon's `SetTrainerService` renders.
+    if let Some(trainer) = trainer_subjects.as_deref() {
         wanted.extend(
-            trainer_subjects
+            trainer
                 .0
                 .iter()
                 .copied()
-                .filter(|spell_id| !memory.pushed.contains(spell_id)),
+                .filter(|s| !memory.pushed.contains(s)),
         );
     }
     // Every rank of the class's talents: a talent tooltip reads the current and the next rank.

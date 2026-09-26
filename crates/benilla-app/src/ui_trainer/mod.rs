@@ -99,12 +99,11 @@ impl TrainerOpen {
 #[derive(Resource, Default)]
 pub(crate) struct TrainerErrors(pub Vec<u32>);
 
-/// Spell-tooltip subjects resolved from the open trainer's services. The tooltip feed consumes
-/// this derived view; the network-facing [`TrainerOpen`] remains the packet's raw service list.
+/// The spells the open trainer's services show as tooltips, which the spell-tooltip feed pushes.
 #[derive(Resource, Default)]
 pub(crate) struct TrainerTooltipSubjects(pub(crate) Vec<u32>);
 
-/// The trainer snapshot + derived-subject feed, used to order tooltip prefetch before UI input.
+/// The trainer feed, which the spell-tooltip feed runs after.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct TrainerFeed;
 
@@ -277,7 +276,7 @@ fn snapshot(
 /// The re-evaluator's inputs and its descriptor triggers: the player's descriptor and its field
 /// edges (money, level, a skill slot), the pet bar, and the stores that resolve the pet.
 #[derive(SystemParam)]
-struct ReEvalInputs<'w, 's> {
+pub(crate) struct ReEvalInputs<'w, 's> {
     self_player: Query<'w, 's, (Entity, &'static ObjectStore), With<SelfPlayer>>,
     stores: Query<'w, 's, &'static ObjectStore>,
     index: Res<'w, GuidIndex>,
@@ -288,7 +287,7 @@ struct ReEvalInputs<'w, 's> {
 /// Push the current trainer into the VM and fire its events on a change. Another trainer while
 /// open is a close then an open: `ShowUIPanel` returns early on a visible frame.
 #[allow(clippy::too_many_arguments)] // one Bevy system's full input set
-fn feed_trainer(
+pub(crate) fn feed_trainer(
     script: Option<NonSendMut<UiScript>>,
     // Writes the re-derived states, as `0x4d7d40` overwrites its own records.
     mut open: ResMut<TrainerOpen>,
@@ -430,6 +429,7 @@ fn feed_trainer(
                 .filter(|t| !t.is_empty())
         },
     );
+    // A spell subject's view must be in the store before the detail icon is hovered.
     let mut fresh_tooltip_subjects: Vec<u32> = fresh
         .iter()
         .flat_map(|state| &state.services)
