@@ -28,7 +28,9 @@ mod world;
 
 pub(crate) use cursor::{drive_targeting_cursor, ground_cast_radius};
 pub(crate) use item::{commit_item_cast_on_pick, EnchantConfirmItem};
-pub(crate) use world::{commit_ground_cast_on_click, commit_object_cast_on_click};
+pub(crate) use world::{
+    commit_ground_cast_on_click, commit_object_cast_on_click, commit_unit_cast_on_click,
+};
 
 use bevy::prelude::*;
 
@@ -39,6 +41,7 @@ use benilla_world::interact::WorldRightPress;
 /// - `Location`: `TargetingWantsLocation 0x6e6320`, `word & 0x60`, the terrain click.
 /// - `Item`: `TargetingWantsItem 0x6e6330`, `word & 0x4010`, the bag and paper-doll clicks.
 /// - `GameObject`: `TargetingWantsGameObject 0x6e62d0`, `word & 0x4800`, the world object click.
+/// - `Unit`: `SpellCanTargetUnit 0x6e6460`, the unit arm of the world click.
 ///
 /// The masks overlap on `TARGET_FLAG_LOCKED`, so a lock spell answers both the item and the
 /// GameObject seam; the reference settles it only at the click, where `BindTarget 0x6e5b40` picks
@@ -48,6 +51,7 @@ pub(crate) enum TargetingWants {
     Location,
     Item,
     GameObject,
+    Unit,
 }
 
 /// The unit-shaped bits of the flag_word, what `SpellCanTargetUnit` tests. The resolver binds or
@@ -60,6 +64,7 @@ impl TargetingWants {
             Self::Location => 0x0060,
             Self::Item => 0x4010,
             Self::GameObject => 0x4800,
+            Self::Unit => UNIT_WORD_BITS,
         };
         word & mask != 0
     }
@@ -204,6 +209,33 @@ pub(crate) fn drain_stop_targeting(
     if script.take_stop_targeting() {
         debug!("ui_action: targeting cancelled (ESC chain)");
         targeting.clear();
+    }
+}
+
+/// Drain `SpellTargetUnit(unit)` after the UI click: stock unit frames call this before their
+/// ordinary selection arm, and `BindTarget 0x6e5b40` commits the pending spell at that token.
+pub(crate) fn drain_spell_target_unit(
+    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    tokens: crate::ui_unit::UnitTokens,
+    selection: Res<crate::target::Selection>,
+    mut ladder: crate::spell::CastLadder,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    let requests = script.take_spell_target_unit();
+    if requests.is_empty() {
+        return;
+    }
+    for token in requests {
+        let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Unit) else {
+            continue;
+        };
+        let Some((_, guid)) = tokens.resolve(&token, &selection) else {
+            continue;
+        };
+        debug!("ui_action: cast {spell_id} committed at unit token {token} ({guid:#x})");
+        ladder.commit_targeted(spell_id, commit, super::cast_send::TargetedBind::Unit(guid));
     }
 }
 

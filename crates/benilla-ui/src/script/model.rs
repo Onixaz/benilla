@@ -243,6 +243,8 @@ pub(crate) struct Model {
     pub(crate) target_clear: bool,
     /// `DropItemOnUnit` tokens (`0x48d960`), gated by the app; a refusal silently keeps the item.
     pub(crate) drop_item_on_unit: Vec<String>,
+    /// `SpellTargetUnit` tokens: a unit frame binds the spell currently waiting on the cursor.
+    pub(crate) spell_target_unit: Vec<String>,
 
     /// Channels the server confirmed, in join order: the numbers `GetChannelName` answers.
     pub(crate) joined_channels: Vec<Option<String>>,
@@ -432,8 +434,8 @@ pub(crate) struct Model {
     /// Spell targeting is on (`SpellIsTargeting`, `0x6e6cd0`); it gates `SpellStopTargeting()`,
     /// whose nil the ESC chain falls through on (`UIParent.lua:1490`).
     pub(crate) spell_targeting: bool,
-    /// `SpellCanTargetUnit` (`0x6e6d00`, `0x6e6460`): false while targeting models only location,
-    /// item and object words; a unit-target spell resolves or refuses without entering targeting.
+    /// `SpellCanTargetUnit` (`0x6e6d00`, `0x6e6460`): whether the armed word has a unit arm, used
+    /// by stock unit frames before they call `SpellTargetUnit`.
     pub(crate) spell_can_target_unit: bool,
     /// `SpellStopTargeting()` fired while targeting: the ESC targeting cancel.
     pub(crate) spell_stop_targeting: bool,
@@ -1061,6 +1063,7 @@ impl Model {
             target_nearest_friend_requests: Vec::new(),
             target_by_name_requests: Vec::new(),
             drop_item_on_unit: Vec::new(),
+            spell_target_unit: Vec::new(),
             target_clear: false,
             joined_channels: Vec::new(),
             party: party::PartyState::default(),

@@ -24,6 +24,21 @@ fn player() -> UnitState {
 }
 
 #[test]
+fn spell_target_unit_queues_the_clicked_unit_token() {
+    let mut s = UiScript::new().unwrap();
+    s.run(r#"SpellTargetUnit("player") SpellTargetUnit("party1")"#)
+        .unwrap();
+    assert_eq!(
+        s.take_spell_target_unit(),
+        vec!["player".to_string(), "party1".to_string()]
+    );
+    assert!(
+        s.run(r#"SpellTargetUnit("not-a-unit")"#).is_err(),
+        "the binding keeps the engine's unit-token validation"
+    );
+}
+
+#[test]
 fn unit_reaction_reports_the_scale_value_or_nil() {
     let mut s = UiScript::new().unwrap();
     // 4 is neutral.

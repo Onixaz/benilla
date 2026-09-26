@@ -9,11 +9,11 @@
 //! - otherwise each bit is cleared against the selection by its relation check, then against the
 //!   player behind `autoSelfCast` (`0x6e53d7`); only a fully cleared word commits, as a unit guid.
 //! - a word with item, lock, GameObject or location bits enters the targeting cursor carrying
-//!   the whole word: its three predicates (`0x6e6320` `& 0x60`, `0x6e6330` `& 0x4010`, `0x6e62d0`
-//!   `& 0x4800`) can hold at once, and the click picks the leg.
+//!   the whole word: its location, item, GameObject and unit predicates can hold at once, and the
+//!   click picks the leg.
 //!
-//! Not built: the unit hand cursor the reference enters for a residual unit word, and the STRING
-//! bit 13; both refuse locally with the client's "You have no target." or "Invalid target".
+//! The unit hand cursor receives a residual unit word; STRING bit 13 remains unmodeled and
+//! refuses locally with "Invalid target".
 
 use benilla_formats::SpellDisplay;
 use bevy::ecs::system::SystemParam;
@@ -41,9 +41,7 @@ const UNIT_BITS: u16 = TF_UNIT
     | TF_EXPLICIT_GATE
     | TF_CORPSE_ALLY;
 
-/// Client cast-failed reasons "You have no target." and "Invalid target", raised locally where
-/// the reference would enter its unit targeting cursor.
-pub(crate) const ERR_NO_TARGET: u8 = 0x09;
+/// Client cast-failed reason "Invalid target".
 pub(crate) const ERR_INVALID_TARGET: u8 = 0x0A;
 
 /// `SPELL_FAILED_MAINHAND_EMPTY`, "Your weapon hand is empty": the reference's own refusal for an
@@ -82,8 +80,7 @@ pub(crate) enum CastWireTarget {
     /// `IsTargeting 0x6e48a0`). Each click seam tests the word with its own mask, so one word can
     /// serve several: Opening and Pick Lock take a bag item or a world GameObject.
     Targeting(u16),
-    /// Do not send; show this client error. The reference raises nothing here: it enters its unit
-    /// targeting cursor, which is not built.
+    /// Do not send; show this client error.
     Refused(u8),
     /// A refusal the reference raises in its cast tail after `ArmCast` returns false (`0x6e5045`).
     /// That tail runs after the requirement validator `0x6094f0`, so it fires at the cursor-entry
@@ -212,8 +209,6 @@ impl CastTargeting<'_, '_> {
 const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 
 /// The `autoSelfCast` CVar (name `0x870dc0`, read at `0x6e53d7`; reference default `"0"`).
-/// Deviation: defaults on, because with it off an unbindable friendly cast needs the unit
-/// targeting cursor, which is not built.
 #[derive(bevy::prelude::Resource)]
 pub(crate) struct AutoSelfCast(pub(crate) bool);
 
@@ -226,7 +221,7 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut auto: ResMut<AutoSe
 
 impl Default for AutoSelfCast {
     fn default() -> Self {
-        Self(true)
+        Self(false)
     }
 }
 
@@ -377,12 +372,9 @@ pub(crate) fn resolve_cast_target(
             }
         }
     }
-    // The reference enters its unit targeting cursor here; not built, so refuse.
-    CastWireTarget::Refused(if cand.selection.is_some() {
-        ERR_INVALID_TARGET
-    } else {
-        ERR_NO_TARGET
-    })
+    // `ArmCast` leaves the residual unit bits standing for `BindTarget`'s unit arm. This is the
+    // hand cursor path used when autoSelfCast cannot bind a friendly spell to the player.
+    CastWireTarget::Targeting(word)
 }
 
 #[cfg(test)]
@@ -404,6 +396,14 @@ mod tests {
             implicit_target_a1: implicit,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn auto_self_cast_boots_at_the_reference_default() {
+        assert!(
+            !AutoSelfCast::default().0,
+            "autoSelfCast defaults to the reference's disabled state"
+        );
     }
 
     #[test]
@@ -455,7 +455,7 @@ mod tests {
         let fireball = spell(0, 6);
         assert_eq!(
             resolve_cast_target(Some(&fireball), &cands(None, Some(1)), true, &rel),
-            CastWireTarget::Refused(ERR_NO_TARGET)
+            CastWireTarget::Targeting(TF_UNIT_ENEMY)
         );
         // Neutral (3) is attackable by the mixed arm's `< 4` and not assistable by `>= 4`.
         assert_eq!(
@@ -470,8 +470,8 @@ mod tests {
         );
         assert_eq!(
             resolve_cast_target(Some(&intellect), &cands(Some(42), Some(1)), false, &rel),
-            CastWireTarget::Refused(ERR_INVALID_TARGET),
-            "autoSelfCast off: the fallback is gated"
+            CastWireTarget::Targeting(TF_UNIT_ASSIST),
+            "autoSelfCast off leaves the friendly word for the unit cursor"
         );
         assert_eq!(
             resolve_cast_target(Some(&intellect), &cands(None, Some(1)), true, &rel),
@@ -481,7 +481,7 @@ mod tests {
         // A hostile-required cast never self-binds.
         assert_eq!(
             resolve_cast_target(Some(&fireball), &cands(None, Some(1)), false, &rel),
-            CastWireTarget::Refused(ERR_NO_TARGET)
+            CastWireTarget::Targeting(TF_UNIT_ENEMY)
         );
         // Unknown spell: the selection passes through.
         assert_eq!(

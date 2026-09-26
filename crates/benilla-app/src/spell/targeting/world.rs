@@ -21,6 +21,35 @@ use benilla_world::interact::WorldClick;
 
 use super::TargetingWants;
 
+/// The unit arm of `BindTarget 0x6e5b40`: a residual unit word belongs to the hand cursor, so a
+/// left click binds the press pick directly and does not change the player's ordinary selection.
+pub(crate) fn commit_unit_cast_on_click(
+    mut clicks: MessageReader<WorldClick>,
+    press: Res<crate::target::PressPick>,
+    mut ladder: crate::spell::CastLadder,
+) {
+    if !ladder.ground.active() {
+        clicks.clear();
+        return;
+    }
+    if clicks.read().last().is_none() {
+        return;
+    }
+    let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Unit) else {
+        return;
+    };
+    let Some(guid) = press
+        .hovered
+        .target
+        .zip(press.hovered.guid)
+        .map(|(_, guid)| guid)
+    else {
+        return;
+    };
+    debug!("ui_action: cast {spell_id} committed at unit {guid:#x}");
+    ladder.commit_targeted(spell_id, commit, TargetedBind::Unit(guid));
+}
+
 /// The terrain leg (`0x492580`): bind the press's ground point and send, with no range check and
 /// no error path, then arm the pending cast and GCD and end the mode. No ground hit (sky) commits
 /// nothing and keeps the mode. [`crate::target::click::select_on_click`] holds off while targeting,
@@ -263,6 +292,39 @@ mod tests {
         assert!(
             !world.resource::<super::super::SpellTargeting>().active(),
             "the commit clears the one word"
+        );
+    }
+
+    /// The residual friendly word is the `autoSelfCast=0` path: it waits for a unit click and
+    /// sends that unit in the ordinary `TARGET_FLAG_UNIT` spell shape.
+    #[test]
+    fn a_click_on_a_hovered_unit_commits_the_hand_cursor_cast() {
+        const HEAL: u32 = 2050;
+        const ALLY: u64 = 0xF130_0000_0000_0001;
+        let (mut world, rx, _) = fixture();
+        let id = world.register_system(commit_unit_cast_on_click);
+        world.resource_mut::<super::super::SpellTargeting>().enter(
+            HEAL,
+            crate::spell::cast_send::CastCommit::Spell,
+            0x0100,
+        );
+        world.resource_mut::<crate::target::PressPick>().hovered = Hovered {
+            target: Some(Entity::from_raw_u32(1).unwrap()),
+            guid: Some(ALLY),
+            distance: 5.0,
+            ..Hovered::default()
+        };
+        click(&mut world, id);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::CastSpell {
+                spell_id: HEAL,
+                target: Some(ALLY),
+            })
+        ));
+        assert!(
+            !world.resource::<super::super::SpellTargeting>().active(),
+            "the unit bind clears the hand cursor"
         );
     }
 

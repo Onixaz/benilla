@@ -76,7 +76,7 @@ pub(crate) fn ground_cast_radius(spells: Option<&Spells>, spell_id: u32, level: 
 ///
 /// The object arm is `0x6e6460`'s GameObject leg: `word & 0x4800`, the lock predicate `0x5f8260`,
 /// then the same min/max range test through `GetMinMaxRange 0x6e3480`. Its unit, world-item and
-/// corpse legs are unreachable here: a unit-target spell never enters targeting mode.
+/// Corpse legs remain unmodeled; a unit word is targetable whenever the unit picker has a target.
 ///
 /// Every seam shows the `Cast` kind, so this reads the whole-word [`SpellTargeting::spell`].
 pub(crate) fn drive_targeting_cursor(
@@ -104,7 +104,9 @@ pub(crate) fn drive_targeting_cursor(
     let me = self_tf.single().ok().map(|tf| tf.translation);
     // "A GameObject is the nearest pick" is the same test the click uses
     // ([`super::world::commit_object_cast_on_click`]).
-    let able = if targeting.wants(TargetingWants::GameObject)
+    let able = if targeting.wants(TargetingWants::Unit) && hovered.target.is_some() {
+        true
+    } else if targeting.wants(TargetingWants::GameObject)
         && crate::target::go_is_nearest(&hovered, &hovered_object)
     {
         object_arm(
