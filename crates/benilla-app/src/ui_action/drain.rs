@@ -168,6 +168,7 @@ pub(super) fn drain_action_uses(
     actions: Res<PlayerActions>,
     targeting: cast_target::CastTargeting,
     mut acquire: MessageWriter<crate::target::AttackNearestRequest>,
+    mut spell_acquire: MessageWriter<crate::target::SpellTargetNearestRequest>,
     // The by-key error line. Not a `CastLadder` field: Bevy panics, at runtime and not in unit
     // tests, on a resource reachable twice from one system.
     mut ui_errors: ResMut<UiErrorKeys>,
@@ -263,6 +264,23 @@ pub(super) fn drain_action_uses(
                     selection.guid,
                     if press.on_self { ", on self" } else { "" }
                 );
+                // A hostile spell with no selection follows the reference's target-acquire arm.
+                // This only selects: the next press goes through the regular cast/range gates
+                // before the spell's combat-start side effect can run.
+                if selection.guid.is_none()
+                    && ladder
+                        .spells
+                        .as_ref()
+                        .and_then(|s| s.catalog.get(b.action))
+                        .is_some_and(|d| d.initiates_auto_attack_at_go())
+                {
+                    debug!(
+                        "ui_action: hostile cast {} with no target - acquiring nearest",
+                        b.action
+                    );
+                    spell_acquire.write(crate::target::SpellTargetNearestRequest);
+                    continue;
+                }
                 ladder.send(
                     b.action,
                     &self_bound(targeting.context(), press),

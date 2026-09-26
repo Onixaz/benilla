@@ -58,7 +58,9 @@ pub(crate) use flash::CombatFlash;
 // The attack-with-no-target request, and the same nearest-enemy core called synchronously for the
 // pet bar's Attack, whose order must leave in the frame it was pressed.
 pub(crate) use relations::{can_assist, can_attack, can_interact};
-pub(crate) use scan::{attack_order_target, AttackNearestRequest, TargetScan};
+pub(crate) use scan::{
+    attack_order_target, AttackNearestRequest, SpellTargetNearestRequest, TargetScan,
+};
 // The chat layer's by-name asks (`/target`, `/assist`).
 pub(crate) use by_name::{AssistRequest, TargetByNameRequest};
 // The reaction decode and its faction catalog, which also tint the target frame
@@ -260,6 +262,7 @@ impl Plugin for TargetPlugin {
             .init_resource::<scan::TabHistory>()
             .init_resource::<scan::LastEnemy>()
             .add_message::<AttackNearestRequest>()
+            .add_message::<SpellTargetNearestRequest>()
             .add_message::<TargetByNameRequest>()
             .add_message::<AssistRequest>()
             .add_message::<click::DeselectGuid>()
@@ -332,7 +335,7 @@ impl Plugin for TargetPlugin {
                     // The one cycler's two sides (`0x493f60`, modes 1 and 2), chained: they share
                     // `TabHistory`, which a side switch clears.
                     (scan::tab_target, scan::target_nearest_friend_requests).chain(),
-                    scan::acquire_and_attack,
+                    (scan::acquire_nearest_for_spell, scan::acquire_and_attack).chain(),
                     flash::drive_flash,
                     // The last-enemy stamp before the ring's death-clear, so a hostile that dies
                     // selected is still remembered (the reference's `TargetLastEnemy` has no

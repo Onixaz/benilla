@@ -723,6 +723,30 @@ fn attack_target_valid(
 #[derive(Message)]
 pub(crate) struct AttackNearestRequest;
 
+/// An offensive spell fired with no selection: acquire its target without starting a swing.
+#[derive(Message)]
+pub(crate) struct SpellTargetNearestRequest;
+
+/// Select the best hostile for a spell; casting remains a separate press so its normal range
+/// gate still runs before combat begins.
+pub(super) fn acquire_nearest_for_spell(
+    mut requests: MessageReader<SpellTargetNearestRequest>,
+    scan: TargetScan,
+    mut selection: ResMut<Selection>,
+    mut seam: crate::creature_anim::AttackSeam,
+    mut ui_error_keys: ResMut<crate::ui_action::UiErrorKeys>,
+) {
+    if requests.read().last().is_none() || selection.guid.is_some() {
+        return;
+    }
+    let Some((_, guid)) =
+        acquire_nearest_enemy(&scan, &mut selection, &mut seam, &mut ui_error_keys)
+    else {
+        return;
+    };
+    debug!("spell target acquire: best candidate {guid:#x} -> select, no swing");
+}
+
 /// Acquire the best candidate and start attacking it; the TAB history is untouched.
 pub(super) fn acquire_and_attack(
     mut requests: MessageReader<AttackNearestRequest>,
