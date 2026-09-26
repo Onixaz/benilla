@@ -12,9 +12,9 @@
 //!   the whole word: its location, item, GameObject and unit predicates can hold at once, and the
 //!   click picks the leg.
 //!
-//! The unit hand cursor receives a residual helpful-unit word. Harmful spells temporarily keep
-//! benilla's previous local no-target/invalid-target refusal; STRING bit 13 remains unmodeled and
-//! refuses locally with "Invalid target".
+//! The unit hand cursor receives a residual unit word without the enemy bit. A word carrying
+//! `0x80` temporarily keeps benilla's previous local no-target/invalid-target refusal; STRING bit
+//! 13 remains unmodeled and refuses locally with "Invalid target".
 
 use benilla_formats::SpellDisplay;
 use bevy::ecs::system::SystemParam;
@@ -42,7 +42,7 @@ const UNIT_BITS: u16 = TF_UNIT
     | TF_EXPLICIT_GATE
     | TF_CORPSE_ALLY;
 
-/// Client cast-failed reasons used by the temporary harmful-spell fallback.
+/// Client cast-failed reasons used by the temporary enemy-word fallback.
 pub(crate) const ERR_NO_TARGET: u8 = 0x09;
 pub(crate) const ERR_INVALID_TARGET: u8 = 0x0A;
 
@@ -374,9 +374,9 @@ pub(crate) fn resolve_cast_target(
             }
         }
     }
-    // Keep the pre-unit-cursor behavior for harmful spells until their reference target-acquire
-    // path is ready. Helpful residual words proceed to `BindTarget`'s hand cursor.
-    if def.is_harmful() {
+    // A standing enemy word keeps the pre-unit-cursor refusal. Every other residual unit word
+    // proceeds to `BindTarget`'s hand cursor.
+    if word & TF_UNIT_ENEMY != 0 {
         CastWireTarget::Refused(if cand.selection.is_some() {
             ERR_INVALID_TARGET
         } else {
@@ -404,7 +404,6 @@ mod tests {
         SpellDisplay {
             targets,
             implicit_target_a1: implicit,
-            effect_implicit_target_a: [implicit, 0, 0],
             ..Default::default()
         }
     }
@@ -467,7 +466,7 @@ mod tests {
         assert_eq!(
             resolve_cast_target(Some(&fireball), &cands(None, Some(1)), true, &rel),
             CastWireTarget::Refused(ERR_NO_TARGET),
-            "harmful spells temporarily retain the previous no-target refusal"
+            "enemy words temporarily retain the previous no-target refusal"
         );
         // Neutral (3) is attackable by the mixed arm's `< 4` and not assistable by `>= 4`.
         assert_eq!(
