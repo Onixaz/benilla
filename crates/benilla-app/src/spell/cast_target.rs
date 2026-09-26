@@ -12,8 +12,7 @@
 //!   the whole word: its location, item, GameObject and unit predicates can hold at once, and the
 //!   click picks the leg.
 //!
-//! The unit hand cursor receives a residual helpful-unit word. Harmful spells temporarily keep
-//! benilla's previous local no-target/invalid-target refusal; STRING bit 13 remains unmodeled and
+//! The unit hand cursor receives a residual unit word; STRING bit 13 remains unmodeled and
 //! refuses locally with "Invalid target".
 
 use benilla_formats::SpellDisplay;
@@ -42,8 +41,7 @@ const UNIT_BITS: u16 = TF_UNIT
     | TF_EXPLICIT_GATE
     | TF_CORPSE_ALLY;
 
-/// Client cast-failed reasons used by the temporary harmful-spell fallback.
-pub(crate) const ERR_NO_TARGET: u8 = 0x09;
+/// Client cast-failed reason "Invalid target".
 pub(crate) const ERR_INVALID_TARGET: u8 = 0x0A;
 
 /// `SPELL_FAILED_MAINHAND_EMPTY`, "Your weapon hand is empty": the reference's own refusal for an
@@ -374,17 +372,9 @@ pub(crate) fn resolve_cast_target(
             }
         }
     }
-    // Keep the pre-unit-cursor behavior for harmful spells until their reference target-acquire
-    // path is ready. Helpful residual words proceed to `BindTarget`'s hand cursor.
-    if def.is_harmful() {
-        CastWireTarget::Refused(if cand.selection.is_some() {
-            ERR_INVALID_TARGET
-        } else {
-            ERR_NO_TARGET
-        })
-    } else {
-        CastWireTarget::Targeting(word)
-    }
+    // `ArmCast` leaves the residual unit bits standing for `BindTarget`'s unit arm. This is the
+    // hand cursor path used when autoSelfCast cannot bind a friendly spell to the player.
+    CastWireTarget::Targeting(word)
 }
 
 #[cfg(test)]
@@ -404,7 +394,6 @@ mod tests {
         SpellDisplay {
             targets,
             implicit_target_a1: implicit,
-            effect_implicit_target_a: [implicit, 0, 0],
             ..Default::default()
         }
     }
@@ -466,8 +455,7 @@ mod tests {
         let fireball = spell(0, 6);
         assert_eq!(
             resolve_cast_target(Some(&fireball), &cands(None, Some(1)), true, &rel),
-            CastWireTarget::Refused(ERR_NO_TARGET),
-            "harmful spells temporarily retain the previous no-target refusal"
+            CastWireTarget::Targeting(TF_UNIT_ENEMY)
         );
         // Neutral (3) is attackable by the mixed arm's `< 4` and not assistable by `>= 4`.
         assert_eq!(
@@ -493,7 +481,7 @@ mod tests {
         // A hostile-required cast never self-binds.
         assert_eq!(
             resolve_cast_target(Some(&fireball), &cands(None, Some(1)), false, &rel),
-            CastWireTarget::Refused(ERR_NO_TARGET)
+            CastWireTarget::Targeting(TF_UNIT_ENEMY)
         );
         // Unknown spell: the selection passes through.
         assert_eq!(
