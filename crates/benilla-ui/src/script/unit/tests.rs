@@ -39,6 +39,21 @@ fn spell_target_unit_queues_the_clicked_unit_token() {
 }
 
 #[test]
+fn spell_can_target_unit_answers_per_validated_token() {
+    let mut s = UiScript::new().unwrap();
+    s.set_spell_targetable_units(["player", "party1"]);
+    assert!(s
+        .eval::<bool>(r#"return SpellCanTargetUnit("player") == true"#)
+        .unwrap());
+    assert!(s
+        .eval::<bool>(r#"return SpellCanTargetUnit("PARTY1") == true"#)
+        .unwrap());
+    assert!(s
+        .eval::<bool>(r#"return SpellCanTargetUnit("target") == nil"#)
+        .unwrap());
+}
+
+#[test]
 fn unit_reaction_reports_the_scale_value_or_nil() {
     let mut s = UiScript::new().unwrap();
     // 4 is neutral.
