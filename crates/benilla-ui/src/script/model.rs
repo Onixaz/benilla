@@ -434,9 +434,9 @@ pub(crate) struct Model {
     /// Spell targeting is on (`SpellIsTargeting`, `0x6e6cd0`); it gates `SpellStopTargeting()`,
     /// whose nil the ESC chain falls through on (`UIParent.lua:1490`).
     pub(crate) spell_targeting: bool,
-    /// `SpellCanTargetUnit` (`0x6e6d00`, `0x6e6460`): whether the armed word has a unit arm, used
-    /// by stock unit frames before they call `SpellTargetUnit`.
-    pub(crate) spell_can_target_unit: bool,
+    /// Tokens for which `SpellCanTargetUnit`'s armed unit word clears fully, used by stock unit
+    /// frames before they call `SpellTargetUnit`.
+    pub(crate) spell_targetable_units: HashSet<String>,
     /// `SpellStopTargeting()` fired while targeting: the ESC targeting cancel.
     pub(crate) spell_stop_targeting: bool,
 
@@ -1151,7 +1151,7 @@ impl Model {
             casting: false,
             spell_stop: false,
             spell_targeting: false,
-            spell_can_target_unit: false,
+            spell_targetable_units: HashSet::new(),
             spell_stop_targeting: false,
             talents: super::talent::TalentUiState::default(),
             talent_learns: Vec::new(),

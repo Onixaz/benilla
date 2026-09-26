@@ -301,6 +301,12 @@ fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 
     word
 }
 
+/// Whether `BindTarget 0x6e5b40`'s unit arm clears the whole standing word for this unit.
+/// The initial selection, a world click and `SpellTargetUnit` all use this one predicate.
+pub(super) fn unit_word_binds(word: u16, is_self: bool, rel: &TargetRelations) -> bool {
+    word & UNIT_BITS != 0 && clear_satisfied_bits(word, is_self, rel) == 0
+}
+
 /// The wire target for casting `def`. An unknown spell sends the selection as is, or no target
 /// without one, and the server validates.
 pub(crate) fn resolve_cast_target(
@@ -358,7 +364,7 @@ pub(crate) fn resolve_cast_target(
     // The selection (`0xb4e2d8`, `0x6e539f`).
     if let Some(guid) = cand.selection {
         let is_self = cand.caster == Some(guid);
-        if clear_satisfied_bits(word, is_self, rel) == 0 {
+        if unit_word_binds(word, is_self, rel) {
             return CastWireTarget::Unit(guid);
         }
     }
@@ -369,7 +375,7 @@ pub(crate) fn resolve_cast_target(
                 target_store: rel.self_store,
                 ..*rel
             };
-            if clear_satisfied_bits(word, true, &self_rel) == 0 {
+            if unit_word_binds(word, true, &self_rel) {
                 return CastWireTarget::Unit(guid);
             }
         }
@@ -474,6 +480,10 @@ mod tests {
             CastWireTarget::Unit(42)
         );
         let intellect = spell(0, 21);
+        assert!(
+            !unit_word_binds(TF_UNIT_ASSIST, false, &rel),
+            "the cursor's unit binder must reject the same neutral unit as the initial cast arm"
+        );
         assert_eq!(
             resolve_cast_target(Some(&intellect), &cands(Some(42), Some(1)), true, &rel),
             CastWireTarget::Unit(1),

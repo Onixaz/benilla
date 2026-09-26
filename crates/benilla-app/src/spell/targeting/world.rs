@@ -26,6 +26,7 @@ use super::TargetingWants;
 pub(crate) fn commit_unit_cast_on_click(
     mut clicks: MessageReader<WorldClick>,
     press: Res<crate::target::PressPick>,
+    checks: super::UnitBindChecks,
     mut ladder: crate::spell::CastLadder,
 ) {
     if !ladder.ground.active() {
@@ -38,14 +39,12 @@ pub(crate) fn commit_unit_cast_on_click(
     let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Unit) else {
         return;
     };
-    let Some(guid) = press
-        .hovered
-        .target
-        .zip(press.hovered.guid)
-        .map(|(_, guid)| guid)
-    else {
+    let Some((entity, guid)) = press.hovered.target.zip(press.hovered.guid) else {
         return;
     };
+    if !ladder.ground.can_bind_unit(entity, &checks) {
+        return;
+    }
     debug!("ui_action: cast {spell_id} committed at unit {guid:#x}");
     ladder.commit_targeted(spell_id, commit, TargetedBind::Unit(guid));
 }
@@ -159,6 +158,7 @@ mod tests {
         world.insert_resource(NetCommands(tx));
         world.init_resource::<crate::items::Items>();
         world.init_resource::<crate::net::GuidIndex>();
+        world.insert_resource(crate::net::Reputations(Vec::new()));
         world.init_resource::<crate::spell::PendingCast>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::Cooldowns>();
@@ -295,8 +295,8 @@ mod tests {
         );
     }
 
-    /// The residual friendly word is the `autoSelfCast=0` path: it waits for a unit click and
-    /// sends that unit in the ordinary `TARGET_FLAG_UNIT` spell shape.
+    /// A unit word waits for a valid unit click and sends that unit in the ordinary
+    /// `TARGET_FLAG_UNIT` spell shape. An assist word does not bind a neutral unit.
     #[test]
     fn a_click_on_a_hovered_unit_commits_the_hand_cursor_cast() {
         const HEAL: u32 = 2050;
@@ -306,7 +306,7 @@ mod tests {
         world.resource_mut::<super::super::SpellTargeting>().enter(
             HEAL,
             crate::spell::cast_send::CastCommit::Spell,
-            0x0100,
+            0x0002,
         );
         world.resource_mut::<crate::target::PressPick>().hovered = Hovered {
             target: Some(Entity::from_raw_u32(1).unwrap()),
@@ -325,6 +325,31 @@ mod tests {
         assert!(
             !world.resource::<super::super::SpellTargeting>().active(),
             "the unit bind clears the hand cursor"
+        );
+
+        // With no faction catalog the target's reaction is neutral (3): an ASSIST word must stay
+        // armed and send nothing, exactly as when that unit was selected before the cast.
+        let (mut world, rx, _) = fixture();
+        let id = world.register_system(commit_unit_cast_on_click);
+        world.resource_mut::<super::super::SpellTargeting>().enter(
+            HEAL,
+            crate::spell::cast_send::CastCommit::Spell,
+            0x0100,
+        );
+        world.resource_mut::<crate::target::PressPick>().hovered = Hovered {
+            target: Some(Entity::from_raw_u32(1).unwrap()),
+            guid: Some(ALLY),
+            distance: 5.0,
+            ..Hovered::default()
+        };
+        click(&mut world, id);
+        assert!(
+            rx.try_recv().is_err(),
+            "a neutral unit must not receive the heal"
+        );
+        assert!(
+            world.resource::<super::super::SpellTargeting>().active(),
+            "an invalid unit click leaves the targeting word standing"
         );
     }
 
