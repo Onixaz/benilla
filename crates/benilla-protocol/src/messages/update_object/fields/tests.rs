@@ -872,7 +872,11 @@ fn rage_and_happiness_divide_for_display_but_not_for_the_raw_readers() {
     let caster = ObjectFields::from_pairs(&[
         (FIELD_UNIT_POWER1 + u16::from(MANA), 4200),
         (FIELD_UNIT_MAXPOWER1 + u16::from(MANA), 8000),
+        (FIELD_UNIT_BASE_MANA, 1500),
+        (FIELD_UNIT_BASE_HEALTH, 1689),
     ]);
+    assert_eq!(caster.unit_base_mana(), Some(1500));
+    assert_eq!(caster.unit_base_health(), Some(1689));
     assert_eq!(caster.unit_shown_power(MANA), caster.unit_power(MANA));
     assert_eq!(
         caster.unit_shown_max_power(MANA),
