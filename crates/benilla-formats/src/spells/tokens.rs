@@ -1,7 +1,7 @@
 //! The spell-description `$`-token engine the 1.12 client runs over `Spell.dbc` description and
-//! aura text (`0x5075f0` → `0x507710`), effect values from `GetEffectPoints 0x6e3800`. Values
-//! print unsigned, as the client's do. `$g` always takes the first form, as there is no gender
-//! input, and `$u` and any unknown or unresolved token stay raw.
+//! aura text (`0x5075f0` → `0x507710`), effect values from `GetEffectPoints 0x6e3800`. Effect
+//! point values print unsigned, as the client's do. `$g` takes the first form without gender
+//! input; unknown or unresolved tokens stay raw.
 
 use super::soft_float;
 use super::{SpellDisplay, SpellDurationCatalog, SpellRadiusCatalog, SpellRangeCatalog};
@@ -303,6 +303,38 @@ fn token_value(
 ) -> Option<(String, f64)> {
     match letter.to_ascii_lowercase() {
         's' | 'm' | 'o' => points_text(letter, slot, d, ctx, scale, level),
+        'b' => {
+            // `507ed4`: `EffectPointsPerComboPoint`, truncated toward zero by `0x40a2b0`.
+            let v = d.effect_points_per_combo_point[slot].trunc() as i32;
+            Some((v.to_string(), f64::from(v)))
+        }
+        'f' => {
+            // `507ff7` / `508025`: the damage multiplier after the prefix scale. Uppercase
+            // rounds half away from zero, while lowercase prints one decimal.
+            let v = d.damage_multiplier[slot] * scale;
+            if letter == 'F' {
+                let n = v.round() as i32;
+                Some((n.to_string(), f64::from(n)))
+            } else {
+                Some((tenths(ctx, v), f64::from(v)))
+            }
+        }
+        'i' => {
+            let v = d.max_affected_targets;
+            Some((v.to_string(), f64::from(v)))
+        }
+        'q' => {
+            let v = d.effect_misc_value[slot];
+            Some((v.to_string(), f64::from(v)))
+        }
+        'u' => {
+            let v = d.stack_amount;
+            Some((v.to_string(), f64::from(v)))
+        }
+        'v' => {
+            let v = d.max_target_level;
+            Some((v.to_string(), f64::from(v)))
+        }
         'd' => {
             let ms = duration_ms(d, ctx);
             let v = if ms < 0 { 0.0 } else { ms as f64 / 1000.0 };
@@ -501,12 +533,14 @@ pub fn substitute(text: &str, spell: &SpellDisplay, ctx: &TokenContext) -> Strin
         };
         match token_value(letter, slot, target, ctx, scale, level) {
             Some((sub, val)) => {
-                // Deviation: every token keys the `$l` plural. The reference's `$a`, `$d`, `$t`,
-                // `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its `$l`
+                // Deviation: the older arms always key the `$l` plural. The reference's `$a`,
+                // `$d`, `$t`, `$e`, `$c`, `$p` and `$z` arms leave `[0xbe0b84]` alone, so its `$l`
                 // keys on the number before them, and Blizzard's "$s1 … every $t1
                 // $lsecond:seconds;" reads "every 1 seconds" in 1.12.1. We print the grammar the
                 // text means.
-                last_value = val;
+                if !matches!(letter, 'f' | 'F') {
+                    last_value = val;
+                }
                 out.push_str(&sub);
             }
             None => out.push_str(&text[start..i]), // unknown token: keep raw
@@ -546,6 +580,20 @@ mod tests {
             }
             .into(),
         )
+    }
+
+    /// Every spell-data formatter key needed by a corpus walk; individual formatter tests above
+    /// pin the reference's unit and spread choices separately.
+    fn corpus_global(key: &str) -> Option<String> {
+        global(key).or_else(|| {
+            if key.starts_with("INT_SPELL_DURATION_") {
+                Some("%d".into())
+            } else if key.starts_with("SPELL_DURATION_") {
+                Some("%.1f".into())
+            } else {
+                None
+            }
+        })
     }
 
     /// `%d`, `%.Nf` and `%%` in order; the tests keep clear of the CRT's rounding ties.
@@ -1233,7 +1281,8 @@ mod tests {
             substitute("as strong as $1234s1 hits", &d, &c),
             "as strong as 100 hits"
         );
-        assert_eq!(substitute("stacks $u times", &d, &c), "stacks $u times");
+        assert_eq!(substitute("stacks $u times", &d, &c), "stacks 0 times");
+        assert_eq!(substitute("unknown $j", &d, &c), "unknown $j");
         assert_eq!(
             substitute("Returns you to $z.", &d, &c),
             "Returns you to Goldshire."
@@ -1333,6 +1382,157 @@ mod tests {
                 &c
             ),
             "25 Frost damage every 1 second"
+        );
+    }
+
+    /// The seven field arms read the referenced row and the chosen effect slot. Integer arms
+    /// update `$l`; the multiplier arms leave its prior count alone (`0x507ed4`-`0x50806e`).
+    #[test]
+    fn field_tokens_read_their_columns_and_plural_counts() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let referenced = SpellDisplay {
+            id: 42,
+            effect_points_per_combo_point: [0.0, -2.9, 0.0],
+            damage_multiplier: [0.5, 1.25, -0.25],
+            effect_misc_value: [135, -1, 0],
+            max_affected_targets: 4,
+            stack_amount: 5,
+            max_target_level: 40,
+            ..Default::default()
+        };
+        let lookup = |id| (id == 42).then_some(&referenced);
+        let c = ctx(&durations, &radii, &lookup);
+        let empty = SpellDisplay::default();
+        assert_eq!(substitute("$42b2 $lone:many;", &empty, &c), "-2 many");
+        assert_eq!(substitute("$42q1 $lone:many;", &empty, &c), "135 many");
+        assert_eq!(substitute("$42Q2 $lone:many;", &empty, &c), "-1 many");
+        assert_eq!(substitute("$42i $42u $42v", &empty, &c), "4 5 40");
+        assert_eq!(substitute("$42I $42U $42V", &empty, &c), "4 5 40");
+        assert_eq!(substitute("$*100;42F1", &empty, &c), "50");
+        assert_eq!(substitute("$42f2", &empty, &c), "1.2");
+        assert_eq!(substitute("$*10;42F3", &empty, &c), "-3");
+        assert_eq!(
+            substitute("$42u $*100;42F1 $lone:many;", &empty, &c),
+            "5 50 many"
+        );
+    }
+
+    #[test]
+    fn shipped_spell_data_tokens_resolve() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let spells = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+        let durations = crate::load_spell_durations(&mut chain).expect("SpellDuration.dbc");
+        let radii = crate::load_spell_radii(&mut chain).expect("SpellRadius.dbc");
+        let ranges = crate::load_spell_ranges(&mut chain).expect("SpellRange.dbc");
+        let lookup = |id| spells.get(id);
+        let c = TokenContext {
+            ranges: Some(&ranges),
+            global: &corpus_global,
+            ..ctx(&durations, &radii, &lookup)
+        };
+        for (id, text, want) in [
+            (1064, "$*100;F1", "50"),
+            (10622, "$*100;F1", "50"),
+            (10623, "$*100;F1", "50"),
+            (22568, "$f1", "1.0"),
+            (2006, "$q1", "135"),
+            (1680, "$i", "4"),
+            (22959, "$u", "5"),
+            (453, "$v", "40"),
+            (14179, "$b1", "20"),
+        ] {
+            assert_eq!(
+                substitute(text, spells.get(id).unwrap(), &c),
+                want,
+                "spell {id}"
+            );
+        }
+        for id in [1064, 10622, 10623] {
+            let spell = spells.get(id).unwrap();
+            assert_eq!(spell.damage_multiplier[0], 0.5, "Chain Heal {id}");
+            let description = spell.description.as_deref().unwrap();
+            assert!(
+                description.contains("$*100;F1"),
+                "Chain Heal {id}: {description}"
+            );
+            assert!(
+                substitute(description, spell, &c).contains("50%"),
+                "Chain Heal {id} must show 50%"
+            );
+        }
+
+        // Walk every shipped spell-data token, including other ranks, effect slots, scale
+        // prefixes and cross-spell references. `$z` needs the player's home area, not Spell.dbc.
+        let mut seen = [0usize; 26];
+        for (id, spell) in spells.iter() {
+            for description in [
+                spell.description.as_deref(),
+                spell.aura_description.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                for (arm, token) in spell_data_tokens_in(description) {
+                    let expanded = substitute(token, spell, &c);
+                    assert_ne!(expanded, token, "spell {id} leaves {token} raw");
+                    seen[arm] += 1;
+                }
+            }
+        }
+        for &arm in b"bfiquv" {
+            assert!(
+                seen[usize::from(arm - b'a')] > 0,
+                "missing ${} in {seen:?}",
+                arm as char
+            );
+        }
+        assert!(
+            seen.iter().sum::<usize>() >= 50,
+            "too few shipped spell-data tokens: {seen:?}"
+        );
+    }
+
+    /// Isolate spell-data tokens, including a scale prefix, cross-spell id and one slot digit,
+    /// using the expander's token boundaries. `$l`, `$g` and `$z` need other context.
+    fn spell_data_tokens_in(text: &str) -> Vec<(usize, &str)> {
+        let bytes = text.as_bytes();
+        let mut found = Vec::new();
+        for start in 0..bytes.len() {
+            if bytes[start] != b'$' {
+                continue;
+            }
+            let mut end = start + 1;
+            if matches!(bytes.get(end), Some(b'*' | b'/')) {
+                let Some(semi) = bytes[end..].iter().position(|&b| b == b';') else {
+                    continue;
+                };
+                end += semi + 1;
+            }
+            while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+                end += 1;
+            }
+            let Some(letter) = bytes.get(end).copied().map(|b| b.to_ascii_lowercase()) else {
+                continue;
+            };
+            if !b"abdefhimnoqrstuvx".contains(&letter) {
+                continue;
+            }
+            end += 1;
+            if bytes.get(end).is_some_and(u8::is_ascii_digit) {
+                end += 1;
+            }
+            found.push((usize::from(letter - b'a'), &text[start..end]));
+        }
+        found
+    }
+
+    #[test]
+    fn spell_data_token_scan_keeps_scale_reference_and_slot() {
+        assert_eq!(
+            spell_data_tokens_in("Each jump is $*100;F1%, stacks $22959u times; $s1 is separate."),
+            vec![(5, "$*100;F1"), (20, "$22959u"), (18, "$s1")]
         );
     }
 
