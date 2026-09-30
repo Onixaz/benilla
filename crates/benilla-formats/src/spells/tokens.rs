@@ -320,19 +320,23 @@ fn token_value(
             }
         }
         'i' => {
-            let v = d.max_affected_targets;
+            // `507fc3`: `MaxAffectedTargets` through `"%d"`.
+            let v = d.max_affected_targets as i32;
             Some((v.to_string(), f64::from(v)))
         }
         'q' => {
+            // `50806e`: the slot's `EffectMiscValue` through `"%d"`.
             let v = d.effect_misc_value[slot];
             Some((v.to_string(), f64::from(v)))
         }
         'u' => {
-            let v = d.stack_amount;
+            // `507ef1`: `StackAmount` through `"%d"`.
+            let v = d.stack_amount as i32;
             Some((v.to_string(), f64::from(v)))
         }
         'v' => {
-            let v = d.max_target_level;
+            // `507f4f`: `MaxTargetLevel` through `"%d"`.
+            let v = d.max_target_level as i32;
             Some((v.to_string(), f64::from(v)))
         }
         'd' => {
@@ -1399,37 +1403,62 @@ mod tests {
         );
     }
 
-    /// The seven field arms read the referenced row and the chosen effect slot. Integer arms
-    /// update `$l`; the multiplier arms leave its prior count alone (`0x507ed4`-`0x50806e`).
+    /// The field arms read the referenced row, `$b`, `$q`, `$f` and `$F` at the slot digit; the
+    /// integer ones print `"%d"` and key the `$l` plural (`507ee0`, `507ef7`, `507f55`, `507fc9`,
+    /// `508075`).
     #[test]
     fn field_tokens_read_their_columns_and_plural_counts() {
         let durations = SpellDurationCatalog::default();
         let radii = SpellRadiusCatalog::default();
-        let referenced = SpellDisplay {
-            id: 42,
-            effect_points_per_combo_point: [0.0, -2.9, 0.0],
-            damage_multiplier: [0.5, 1.25, -0.25],
-            effect_misc_value: [135, -1, 0],
-            max_affected_targets: 4,
-            stack_amount: 5,
-            max_target_level: 40,
-            ..Default::default()
-        };
-        let lookup = |id| (id == 42).then_some(&referenced);
+        let rows = [
+            SpellDisplay {
+                id: 42,
+                effect_points_per_combo_point: [0.0, -2.9, 0.0],
+                damage_multiplier: [0.5, 1.3, -0.25],
+                effect_misc_value: [135, -1, 0],
+                max_affected_targets: 4,
+                stack_amount: 5,
+                max_target_level: 40,
+                ..Default::default()
+            },
+            SpellDisplay {
+                id: 43,
+                effect_points_per_combo_point: [1.9, 0.0, 0.0],
+                effect_misc_value: [0, 0, 1],
+                max_affected_targets: 1,
+                stack_amount: 1,
+                max_target_level: 1,
+                ..Default::default()
+            },
+            SpellDisplay {
+                id: 44,
+                max_affected_targets: 0x8000_0000,
+                stack_amount: u32::MAX,
+                max_target_level: u32::MAX - 1,
+                ..Default::default()
+            },
+        ];
+        let lookup = |id| rows.iter().find(|r| r.id == id);
         let c = ctx(&durations, &radii, &lookup);
         let empty = SpellDisplay::default();
-        assert_eq!(substitute("$42b2 $lone:many;", &empty, &c), "-2 many");
-        assert_eq!(substitute("$42q1 $lone:many;", &empty, &c), "135 many");
-        assert_eq!(substitute("$42Q2 $lone:many;", &empty, &c), "-1 many");
+        assert_eq!(substitute("$42b2", &empty, &c), "-2");
+        assert_eq!(substitute("$42q1 $42Q2", &empty, &c), "135 -1");
         assert_eq!(substitute("$42i $42u $42v", &empty, &c), "4 5 40");
         assert_eq!(substitute("$42I $42U $42V", &empty, &c), "4 5 40");
         assert_eq!(substitute("$*100;42F1", &empty, &c), "50");
-        assert_eq!(substitute("$42f2", &empty, &c), "1.2");
+        assert_eq!(substitute("$42f2", &empty, &c), "1.3");
         assert_eq!(substitute("$*10;42F3", &empty, &c), "-3");
         assert_eq!(
-            substitute("$42u $*100;42F1 $lone:many;", &empty, &c),
-            "5 50 many"
+            substitute("$44i $44u $44v", &empty, &c),
+            "-2147483648 -1 -2"
         );
+        for token in ["$43b1", "$43q3", "$43i", "$43u", "$43v"] {
+            assert_eq!(
+                substitute(&format!("{token} $lone:many;"), &empty, &c),
+                "1 one",
+                "{token}"
+            );
+        }
     }
 
     /// `$f` and `$F` (`507ff7`, `508025`) multiply on the x87 at PC_53, so the product of the two
