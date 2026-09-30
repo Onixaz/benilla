@@ -1,7 +1,8 @@
 //! The spell-description `$`-token engine the 1.12 client runs over `Spell.dbc` description and
 //! aura text (`0x5075f0` → `0x507710`), effect values from `GetEffectPoints 0x6e3800`. Effect
 //! point values print unsigned, as the client's do. `$g` takes the first form without gender
-//! input; unknown or unresolved tokens stay raw.
+//! input. `$c` and `$p` (`507dde`, `507ded`), which no shipped text uses, and unknown or
+//! unresolved tokens stay raw.
 
 use super::soft_float;
 use super::{SpellDisplay, SpellDurationCatalog, SpellRadiusCatalog, SpellRangeCatalog};

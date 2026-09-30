@@ -162,11 +162,11 @@ pub struct SpellDisplay {
     pub proc_chance: u32,
     /// `ProcCharges` (column 26): the description expander's `$n` value before op 4.
     pub proc_charges: u32,
-    /// `StackAmount` (column 39): the description's `$u` count.
+    /// `StackAmount` (column 39): the description expander's `$u` (`507ef1`).
     pub stack_amount: u32,
-    /// `MaxTargetLevel` (column 159): the description's `$v` level.
+    /// `MaxTargetLevel` (column 159): the description expander's `$v` (`507f4f`).
     pub max_target_level: u32,
-    /// `MaxAffectedTargets` (column 163): the description's `$i` count.
+    /// `MaxAffectedTargets` (column 163): the description expander's `$i` (`507fc3`).
     pub max_affected_targets: u32,
     /// `EffectBasePoints[3]` (columns 76-78, signed): each roll's floor; -1 on weapon damage.
     pub effect_base_points: [i32; 3],
@@ -188,9 +188,9 @@ pub struct SpellDisplay {
     pub effect_chain_targets: [u32; 3],
     /// `EffectMultipleValue[3]` (columns 97-99, float): the chain or multi-target falloff.
     pub effect_multiple_value: [f32; 3],
-    /// `DmgMultiplier[3]` (columns 167-169): the description's `$f` and `$F` values.
+    /// `DmgMultiplier[3]` (columns 167-169, float): `$f`/`$F` print it scaled (`507ff7`, `508025`).
     pub damage_multiplier: [f32; 3],
-    /// `EffectPointsPerComboPoint[3]` (columns 112-114): the description's `$b` values.
+    /// `EffectPointsPerComboPoint[3]` (columns 112-114, float): `$b` prints it chopped (`507ed4`).
     pub effect_points_per_combo_point: [f32; 3],
     /// `EffectTriggerSpell[3]` (columns 109-111): each effect's triggered spell, 0 for none.
     pub effect_trigger_spell: [u32; 3],
