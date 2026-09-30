@@ -39,6 +39,65 @@ fn harness() -> UiScript {
     harness_with(&[])
 }
 
+/// Turtle's patched menu: the stock Options rung is hidden, its UI Options replacement is shown,
+/// Sound Options is absent, and Shop is an extra rung above both.
+const TURTLE_MENU: &[u8] = br#"
+<Ui>
+    <Frame name="GameMenuFrame" parent="UIParent" hidden="true">
+        <Frames>
+            <Button name="GameMenuButtonShop" inherits="GameMenuButtonTemplate"/>
+            <Button name="GameMenuButtonOptions" inherits="GameMenuButtonTemplate" hidden="true"/>
+            <Button name="GameMenuButtonUIOptions" inherits="GameMenuButtonTemplate"/>
+            <Button name="GameMenuButtonKeybindings" inherits="GameMenuButtonTemplate"/>
+            <Button name="GameMenuButtonMacros" inherits="GameMenuButtonTemplate"/>
+            <Button name="GameMenuButtonLogout" inherits="GameMenuButtonTemplate"/>
+            <Button name="GameMenuButtonQuit" inherits="GameMenuButtonTemplate"/>
+            <Button name="GameMenuButtonContinue" inherits="GameMenuButtonTemplate"/>
+        </Frames>
+        <Scripts><OnShow>this:SetAlpha(1)</OnShow></Scripts>
+    </Frame>
+</Ui>
+"#;
+
+/// The layer wins over Turtle's reshaped ESC menu without suppressing the rest of its FrameXML:
+/// the missing Sound Options rung is harmless, Turtle's two visible rungs stay hidden, and the
+/// rebound stock Options button opens benilla's window.
+#[test]
+fn the_turtle_menu_is_reshaped_into_benillas_menu() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let _chain = super::reference_ui::fixture::lay(&[(
+        r"Interface\FrameXML\GameMenuFrame.xml",
+        Some(TURTLE_MENU),
+    )]);
+    let s = harness();
+    s.run(
+        "CreateFrame(\"Frame\", \"BenillaOptionsFrame\", UIParent) \
+         BenillaOptionsFrame:Hide() \
+         UIPanelWindows[\"BenillaOptionsFrame\"] = { area = \"center\", pushable = 0, whileDead = 1 }",
+    )
+    .unwrap();
+
+    s.run("ShowUIPanel(GameMenuFrame)").unwrap();
+    assert!(s
+        .eval::<bool>("return GameMenuButtonOptions:IsVisible()")
+        .unwrap());
+    assert!(!s
+        .eval::<bool>(
+            "return GameMenuButtonUIOptions:IsVisible() or GameMenuButtonShop:IsVisible()"
+        )
+        .unwrap());
+    assert!(s
+        .eval::<bool>("return GameMenuButtonSoundOptions == nil")
+        .unwrap());
+
+    s.run("GameMenuButtonOptions:Click()").unwrap();
+    assert!(s
+        .eval::<bool>("return BenillaOptionsFrame:IsVisible()")
+        .unwrap());
+    assert!(!s.eval::<bool>("return GameMenuFrame:IsVisible()").unwrap());
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// [`harness_with`] over the stock bag stack and `extra`.
 fn bag_harness_with(extra: &[&str]) -> UiScript {
     let files: Vec<&str> = BAG_UI.iter().chain(extra).copied().collect();

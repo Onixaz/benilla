@@ -115,6 +115,9 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
         .next()
         .is_some_and(|l| l.eq_ignore_ascii_case("OptionsFrame.xml"))
         && !super::reference_ui::is_chain_entry(&path)
+        && !s
+            .eval::<bool>("return BENILLA_TEST_WITHOUT_STOCK_GRAPHICS_SLIDERS and true or false")
+            .expect("the stock-graphics-table fixture flag")
     {
         let bytes = read("Interface/FrameXML/OptionsFrame.lua")
             .expect("the reference's own OptionsFrame.lua");

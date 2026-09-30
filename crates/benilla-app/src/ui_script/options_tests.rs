@@ -16,7 +16,17 @@ fn harness_on(s: UiScript) -> UiScript {
 
 /// [`harness_on`] with a page's `definers` merged in: the files its rows read, each loaded once
 /// and in the production order.
-fn harness_with(mut s: UiScript, definers: &[&str]) -> UiScript {
+fn harness_with(s: UiScript, definers: &[&str]) -> UiScript {
+    harness_with_slider_table(s, definers, true)
+}
+
+/// [`harness_with`] with the stock video-options slider table optionally removed immediately
+/// before the layer loads, as Turtle's replacement `OptionsFrame.lua` leaves it.
+fn harness_with_slider_table(
+    mut s: UiScript,
+    definers: &[&str],
+    stock_slider_table: bool,
+) -> UiScript {
     s.set_screen_size(1024.0, 768.0);
     const WINDOW: &[&str] = &[
         "Interface\\FrameXML\\GlobalStrings.lua",
@@ -45,6 +55,13 @@ fn harness_with(mut s: UiScript, definers: &[&str]) -> UiScript {
         "GameMenuAdapters.xml",
     ];
     for file in super::test_ui::production_order(&[definers, WINDOW]) {
+        if file == "OptionsFrame.xml" && !stock_slider_table {
+            s.run(
+                "BENILLA_TEST_WITHOUT_STOCK_GRAPHICS_SLIDERS = 1 \
+                 OptionsFrameSliders = nil",
+            )
+            .unwrap();
+        }
         // Our window loads strict: a missing template there fails instead of only warning.
         if file == "OptionsFrame.xml" {
             super::test_ui::load_ui_strict(&s, file);
@@ -57,6 +74,37 @@ fn harness_with(mut s: UiScript, definers: &[&str]) -> UiScript {
     super::manifest::apply_buff_durations(&s).unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     s
+}
+
+/// Turtle replaces the stock `OptionsFrame.lua` and therefore has no `OptionsFrameSliders`.
+/// Benilla's graphics page retains the six 1.12 bounds it consumes without publishing a fake
+/// stock table or changing the vanilla path.
+#[test]
+fn the_graphics_page_keeps_its_bounds_without_the_stock_slider_table() {
+    benilla_formats::wow_data_or_skip!();
+    let s = harness_with_slider_table(UiScript::new().unwrap(), &[], false);
+    assert!(s.eval::<bool>("return OptionsFrameSliders == nil").unwrap());
+
+    let bounds: Vec<f64> = s
+        .eval(
+            "local out = {} \
+             for _, i in ipairs({ 1, 2, 3, 6, 8, 9 }) do \
+                 local v = BENILLA_GRAPHICS_SLIDERS[i] \
+                 table.insert(out, v.minValue) \
+                 table.insert(out, v.maxValue) \
+                 table.insert(out, v.valueStep) \
+             end \
+             return out",
+        )
+        .unwrap();
+    assert_eq!(
+        bounds,
+        [
+            0.64, 1.0, 0.01, 177.0, 777.0, 60.0, 0.0, 2.0, 1.0, -0.5, 0.5, 0.1, 0.0, 2.0, 1.0, 0.0,
+            3.0, 1.0,
+        ]
+    );
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
 /// On the reference's igMainMenuOption kit; the window takes the center slot the menu leaves.

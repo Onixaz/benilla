@@ -47,16 +47,21 @@
             HideUIPanel(GameMenuFrame)
             ShowUIPanel(BenillaOptionsFrame)
         end)
+        -- Turtle hides this stock rung and lays its replacement over it. The layer owns the
+        -- visible menu, so put the rebound stock rung back.
+        GameMenuButtonOptions:Show()
 
-        for _, fold in ipairs({
-            { GameMenuButtonSoundOptions, GameMenuButtonOptions },
-            { GameMenuButtonUIOptions, GameMenuButtonSoundOptions },
-        }) do
-            local button, above = fold[1], fold[2]
+        local function FoldOptionsRung(button, above)
+            if not button then return above end
             button:Hide()
             button:ClearAllPoints()
             button:SetPoint("TOP", above, "BOTTOM", 0, button:GetHeight())
+            return button
         end
+        local folded = FoldOptionsRung(GameMenuButtonSoundOptions, GameMenuButtonOptions)
+        FoldOptionsRung(GameMenuButtonUIOptions, folded)
+        -- Turtle adds this above its replacement Options rung; it is not part of benilla's menu.
+        if GameMenuButtonShop then GameMenuButtonShop:Hide() end
         -- Key Bindings keeps its stock anchor, 1 under UI Options: the era rungs hang from its
         -- top, so an addon that inserts a button above it and re-anchors it under that button
         -- (ShaguTweaks) moves them down as it moves the stock rungs.

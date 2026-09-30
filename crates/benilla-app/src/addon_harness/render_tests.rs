@@ -3,6 +3,11 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::symlink as symlink_dir;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_dir;
+
 use super::{survey, Drew};
 
 /// One throwaway AddOns root, cleaned up on drop even if a test panics.
@@ -148,7 +153,7 @@ fn omnicc_and_bagnon_come_out_on_opposite_sides() {
     // Symlinked into a small root: the full corpus sweep is the `addon_harness` example's job.
     let fx = Fixtures::new("oracle");
     for name in ["!OmniCC", "Bagnon", "Bagnon_Core", "Bagnon_Forever"] {
-        std::os::unix::fs::symlink(corpus.join(name), fx.root().join(name)).unwrap();
+        symlink_dir(corpus.join(name), fx.root().join(name)).unwrap();
     }
     let reports = survey(fx.root());
     let row = |name: &str| {
