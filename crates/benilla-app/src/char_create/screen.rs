@@ -205,6 +205,80 @@ fn left_tower(
     catalog: Option<&CharCreate>,
 ) {
     let px = |v: f32| Val::Px(v * s);
+    let race_rows = [ALLIANCE, HORDE]
+        .iter()
+        .map(|faction| {
+            faction
+                .iter()
+                .filter(|race| catalog.is_some_and(|c| c.0.is_playable_race(**race)))
+                .count()
+        })
+        .max()
+        .unwrap_or_default();
+    // Turtle's five-race layout changes the entire lower stack: 45² race buttons at a 50 px
+    // pitch, then 40² gender and class buttons. Keep vanilla's authored positions unchanged.
+    let expanded_races = race_rows > 4;
+    let (
+        race_icon_scale,
+        race_row_gap,
+        race_inset,
+        gender_left,
+        gender_top,
+        gender_icon_scale,
+        class_left,
+        class_top,
+        class_width,
+        class_icon_scale,
+        class_column_gap,
+        class_row_gap,
+        dial_top,
+        randomize_top,
+    ) = if expanded_races {
+        // Turtle's `CharacterCreate.xml` anchors gender under RaceButton5, then the four-column
+        // class grid under gender. The dials follow ClassButton6's second row.
+        (
+            45.0 / 48.0,
+            5.0,
+            0.0,
+            60.0,
+            338.0,
+            40.0 / 48.0,
+            16.0,
+            393.0,
+            4.0 * 40.0 + 3.0 * 5.0,
+            40.0 / 48.0,
+            5.0,
+            3.0,
+            491.0,
+            656.0,
+        )
+    } else {
+        (
+            1.0,
+            5.0,
+            0.0,
+            53.0,
+            303.0,
+            1.0,
+            27.0,
+            369.0,
+            3.0 * 48.0 + 2.0 * 4.0,
+            1.0,
+            4.0,
+            0.0,
+            480.0,
+            645.0,
+        )
+    };
+    // `CharacterCreate.xml` sizes the vanilla banner to 259 px, but Turtle's five-race layout
+    // authors the same atlas at 500 px. The latter keeps its colored faction flags behind the
+    // entire expanded race column.
+    let banner_height = if expanded_races { 500.0 } else { 259.0 };
+    // Turtle's third outer-border piece is 228 px (rather than vanilla's 210), leaving its
+    // authored margin below the lower Randomize button after the expanded stack.
+    let tower_background_height = if expanded_races { 698.0 } else { 680.0 };
+    let tower_bottom_height = if expanded_races { 228.0 } else { 210.0 };
+
     ui.spawn((Node {
         position_type: PositionType::Absolute,
         left: px(28.0),
@@ -217,13 +291,19 @@ fn left_tower(
             // `UI-CharacterCreate-Background` behind three stacked `OuterBorder` pieces, 224 wide
             // centered on the 206 frame (x -9).
             if let Some(bg) = &art.tower_bg {
-                tower.spawn((ImageNode::new(bg.clone()), abs(s, -3.0, 0.0, 218.0, 680.0)));
+                tower.spawn((
+                    ImageNode::new(bg.clone()),
+                    abs(s, -3.0, 0.0, 218.0, tower_background_height),
+                ));
             }
             if let Some((border, size)) = &art.tower_border {
+                // The first crop owns the top cap and the last owns the bottom cap. Reusing the
+                // top-cap rows for the middle piece draws a false horizontal frame through the
+                // race list, so that piece starts below the 46 px cap instead.
                 for (top, height, tc) in [
                     (0.0, 236.0, [0.0, 0.875, 0.0, 0.9375]),
-                    (236.0, 240.0, [0.0, 0.875, 0.0, 0.9375]),
-                    (476.0, 210.0, [0.0, 0.875, 0.1796875, 1.0]),
+                    (236.0, 240.0, [0.0, 0.875, 0.1796875, 0.9375]),
+                    (476.0, tower_bottom_height, [0.0, 0.875, 0.1796875, 1.0]),
                 ] {
                     tower.spawn((
                         ImageNode {
@@ -235,11 +315,11 @@ fn left_tower(
                     ));
                 }
             }
-            // `CharacterCreateBanners`, 256×259 at TOP (-2,-60), behind the race grid.
+            // `CharacterCreateBanners`, 256 wide at TOP (-2,-60), behind the race grid.
             if let Some(banners) = &art.banners {
                 tower.spawn((
                     ImageNode::new(banners.clone()),
-                    abs(s, -27.0, 60.0, 256.0, 259.0),
+                    abs(s, -27.0, 60.0, 256.0, banner_height),
                 ));
             }
             // The XML's `text="ALLIANCE"` is a GlueStrings key, shown as "Alliance".
@@ -265,15 +345,16 @@ fn left_tower(
                 );
             }
 
-            // Two columns of 48² buttons at (33,68) and (127,68), row pitch 48+5.
+            // Vanilla uses two 48² columns at (33,68) and (127,68); Turtle keeps their origins
+            // but uses five 45² rows at pitch 50.
             for (faction, left) in [(ALLIANCE, 33.0), (HORDE, 127.0)] {
                 tower
                     .spawn((Node {
                         position_type: PositionType::Absolute,
-                        left: px(left),
+                        left: px(left + race_inset),
                         top: px(68.0),
                         flex_direction: FlexDirection::Column,
-                        row_gap: px(5.0),
+                        row_gap: px(race_row_gap),
                         ..default()
                     },))
                     .with_children(|col| {
@@ -291,18 +372,18 @@ fn left_tower(
                                 None::<DynText>,
                                 race_name(race),
                                 art,
-                                s,
+                                s * race_icon_scale,
                             );
                         }
                     });
             }
 
-            // The gender pair at race button 4's BOTTOMLEFT + (20,-28).
+            // Vanilla places gender under race 4; Turtle anchors its smaller pair under race 5.
             tower
                 .spawn((Node {
                     position_type: PositionType::Absolute,
-                    left: px(53.0),
-                    top: px(303.0),
+                    left: px(gender_left),
+                    top: px(gender_top),
                     flex_direction: FlexDirection::Row,
                     column_gap: px(5.0),
                     ..default()
@@ -326,21 +407,22 @@ fn left_tower(
                             None::<DynText>,
                             strings.text(key, fallback),
                             art,
-                            s,
+                            s * gender_icon_scale,
                         );
                     }
                 });
 
-            // Three wide, columns at x 27/79/131; 8 slots, unused ones collapse.
+            // Vanilla is three wide at x 27/79/131. Turtle is four 40² columns under gender.
             tower
                 .spawn((Node {
                     position_type: PositionType::Absolute,
-                    left: px(27.0),
-                    top: px(369.0),
-                    width: px(3.0 * 48.0 + 2.0 * 4.0),
+                    left: px(class_left),
+                    top: px(class_top),
+                    width: px(class_width),
                     flex_direction: FlexDirection::Row,
                     flex_wrap: FlexWrap::Wrap,
-                    column_gap: px(4.0),
+                    column_gap: px(class_column_gap),
+                    row_gap: px(class_row_gap),
                     ..default()
                 },))
                 .with_children(|grid| {
@@ -354,7 +436,7 @@ fn left_tower(
                             Some(DynText::ClassSlotLabel(slot)),
                             "",
                             art,
-                            s,
+                            s * class_icon_scale,
                         );
                     }
                 });
@@ -364,7 +446,7 @@ fn left_tower(
                 .spawn((Node {
                     position_type: PositionType::Absolute,
                     left: px(4.0),
-                    top: px(480.0),
+                    top: px(dial_top),
                     width: px(198.0),
                     flex_direction: FlexDirection::Column,
                     ..default()
@@ -382,7 +464,7 @@ fn left_tower(
                 .spawn((Node {
                     position_type: PositionType::Absolute,
                     left: px(30.0),
-                    top: px(645.0),
+                    top: px(randomize_top),
                     ..default()
                 },))
                 .with_children(|r| {
