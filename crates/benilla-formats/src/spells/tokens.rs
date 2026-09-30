@@ -1404,9 +1404,9 @@ mod tests {
         );
     }
 
-    /// The field arms read the referenced row, `$b`, `$q`, `$f` and `$F` at the slot digit; the
-    /// integer ones print `"%d"` and key the `$l` plural (`507ee0`, `507ef7`, `507f55`, `507fc9`,
-    /// `508075`).
+    /// The field arms read the referenced row, `$b`, `$q`, `$f` and `$F` at the slot digit; `$b`,
+    /// `$u`, `$v`, `$i` and `$q` print `"%d"` and key the `$l` plural (`507ee0`, `507ef7`,
+    /// `507f55`, `507fc9`, `508075`).
     #[test]
     fn field_tokens_read_their_columns_and_plural_counts() {
         let durations = SpellDurationCatalog::default();
@@ -1554,7 +1554,7 @@ mod tests {
     }
 
     /// Isolate spell-data tokens, including a scale prefix, cross-spell id and one slot digit,
-    /// using the expander's token boundaries. `$l`, `$g` and `$z` need other context.
+    /// bounded as `substitute` bounds them. `$l`, `$g` and `$z` need other context.
     fn spell_data_tokens_in(text: &str) -> Vec<(usize, &str)> {
         let bytes = text.as_bytes();
         let mut found = Vec::new();
