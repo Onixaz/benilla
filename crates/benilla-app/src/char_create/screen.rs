@@ -53,6 +53,7 @@ pub(super) fn enter_create(
         &portraits,
         &art,
         strings.as_deref(),
+        catalog.as_deref(),
         &window,
     );
 }
@@ -66,6 +67,7 @@ pub(super) fn rescale_screen(
     portraits: Res<PortraitImages>,
     art: Res<GlueArt>,
     strings: Option<Res<GlueStrings>>,
+    catalog: Option<Res<CharCreate>>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
     let s = crate::glue::screen_scale(window.single().ok());
@@ -78,6 +80,7 @@ pub(super) fn rescale_screen(
                 &portraits,
                 &art,
                 strings.as_deref(),
+                catalog.as_deref(),
                 &window,
             );
         }
@@ -90,6 +93,7 @@ fn spawn_screen(
     portraits: &PortraitImages,
     art: &GlueArt,
     strings: Option<&GlueStrings>,
+    catalog: Option<&CharCreate>,
     window: &Query<&Window, With<PrimaryWindow>>,
 ) {
     let font = wow_font(assets);
@@ -141,7 +145,7 @@ fn spawn_screen(
     // The chrome hangs off the canvas, the boxed scene's rect, never the window.
     let mut canvas = commands.spawn((crate::glue::glue_canvas(), ChildOf(root)));
     canvas.with_children(|ui| {
-        left_tower(ui, art, &font, s, strings);
+        left_tower(ui, art, &font, s, strings, catalog);
 
         // `CharacterCreateWoWLogo` (256×128 at (3,-7)), after the tower, as the reference's
         // frame order draws it over the border art.
@@ -198,6 +202,7 @@ fn left_tower(
     font: &Handle<Font>,
     s: f32,
     strings: &GlueStrings,
+    catalog: Option<&CharCreate>,
 ) {
     let px = |v: f32| Val::Px(v * s);
     ui.spawn((Node {
@@ -272,7 +277,11 @@ fn left_tower(
                         ..default()
                     },))
                     .with_children(|col| {
-                        for race in faction {
+                        for race in faction
+                            .iter()
+                            .copied()
+                            .filter(|race| catalog.is_some_and(|c| c.0.is_playable_race(*race)))
+                        {
                             icon_button(
                                 col,
                                 font,

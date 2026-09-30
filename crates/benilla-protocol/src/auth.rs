@@ -213,6 +213,14 @@ pub fn write_logon_proof(
 pub fn read_proof_reply(r: &mut impl Read) -> Result<[u8; 20]> {
     let opcode = read_u8(r)?;
     if opcode != CMD_AUTH_LOGON_PROOF {
+        // Mangos-family realmd rejects an unsupported build at the proof stage with a
+        // challenge-shaped reply: opcode 0, padding 0, then WOW_FAIL_VERSION_INVALID. Surface the
+        // actual rejection instead of reporting only that opcode 0 was unexpected.
+        if opcode == CMD_AUTH_LOGON_CHALLENGE {
+            let _padding = read_u8(r)?;
+            let result = read_u8(r)?;
+            return Err(AuthReject { code: result }.into());
+        }
         bail!("expected CMD_AUTH_LOGON_PROOF (0x01), got {opcode:#x}");
     }
     let result = read_u8(r)?;
@@ -335,6 +343,14 @@ mod tests {
         let mut salt = MANGOS_VERSION_CHALLENGE;
         salt[0] ^= 0xff;
         assert_eq!(version_proof(&salt, &test_public_key()), [0u8; 20]);
+    }
+
+    #[test]
+    fn a_challenge_shaped_build_reject_surfaces_the_result_code() {
+        let mut reply: &[u8] = &[CMD_AUTH_LOGON_CHALLENGE, 0, 0x09];
+        let error = read_proof_reply(&mut reply).unwrap_err();
+        let reject = error.downcast_ref::<AuthReject>().expect("AuthReject");
+        assert_eq!(reject.code, 0x09);
     }
 
     /// `opcode · A[32] · M1[20] · crc_hash[20] · num_keys · security_flag`, 75 bytes.

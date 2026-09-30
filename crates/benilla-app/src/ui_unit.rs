@@ -510,6 +510,8 @@ pub(crate) fn race_names(race: u8) -> Option<(&'static str, &'static str)> {
         6 => ("Tauren", "Tauren"),
         7 => ("Gnome", "Gnome"),
         8 => ("Troll", "Troll"),
+        9 => ("Goblin", "Goblin"),
+        10 => ("High Elf", "BloodElf"),
         _ => return None,
     })
 }
@@ -534,7 +536,7 @@ pub(crate) fn class_names(class: u8) -> Option<(&'static str, &'static str)> {
 /// where addons concatenate `UnitFactionGroup("player")` at file scope; [`faction_group`] reads
 /// the live template.
 pub(crate) fn race_faction_group(race: u8) -> Option<&'static str> {
-    if !(1..=8).contains(&race) {
+    if !(1..=10).contains(&race) {
         return None;
     }
     Some(if crate::char_create::ALLIANCE.contains(&race) {

@@ -137,7 +137,8 @@ impl WorldSession {
             addon_info: None,
         };
 
-        // AUTH_RESPONSE is not always first, so others are skipped; Warden data ends the connect.
+        // AUTH_RESPONSE is not always first, so others are skipped. Turtle sends Warden data but
+        // does not enforce it on this path; an enforcing server may still kick us later.
         loop {
             match session.recv()? {
                 ServerPacket::AuthResponse {
@@ -170,7 +171,7 @@ impl WorldSession {
                 }
                 ServerPacket::Other {
                     opcode: opcode::SMSG_WARDEN_DATA,
-                } => return Err(WardenRequired.into()),
+                } => continue,
                 _ => continue,
             }
         }
@@ -236,10 +237,11 @@ impl WorldSession {
                     self.roster_races = characters.iter().map(|c| (c.guid, c.race)).collect();
                     return Ok(characters);
                 }
-                // Warden can arm on either side of SMSG_AUTH_RESPONSE, so this step refuses it too.
+                // Turtle may send Warden data on either side of SMSG_AUTH_RESPONSE without
+                // enforcing it, so keep waiting for the roster response.
                 ServerPacket::Other {
                     opcode: opcode::SMSG_WARDEN_DATA,
-                } => return Err(WardenRequired.into()),
+                } => continue,
                 // Kept for the world entry when the server sends it this early.
                 ServerPacket::TutorialFlags(flags) => {
                     self.tutorial_flags = Some(flags.bytes);

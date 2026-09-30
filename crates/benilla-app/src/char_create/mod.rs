@@ -30,8 +30,10 @@ use crate::sound::GlueSound;
 ///
 /// The Alliance half is also the race-to-side split `ui_unit::race_faction_group` answers
 /// `UnitFactionGroup("player")` with.
-pub(crate) const ALLIANCE: [u8; 4] = [1, 3, 4, 7]; // Human, Dwarf, Night Elf, Gnome
-const HORDE: [u8; 4] = [2, 5, 6, 8]; // Orc, Scourge, Tauren, Troll
+/// Turtle's added races follow the same per-faction id order. The screen filters these columns
+/// against the loaded catalog, so vanilla data still shows exactly four races per side.
+pub(crate) const ALLIANCE: [u8; 5] = [1, 3, 4, 7, 10]; // + High Elf (BloodElf data row)
+const HORDE: [u8; 5] = [2, 5, 6, 8, 9]; // + Goblin
 /// The reference's initial facing (`SetCharacterCreateFacing(-15)`), reset on every race switch.
 const INITIAL_FACING: f32 = -15.0 * std::f32::consts::PI / 180.0;
 
@@ -673,11 +675,21 @@ mod tests {
 
     #[test]
     fn race_columns_match_the_reference_screen() {
-        assert_eq!(ALLIANCE, [1, 3, 4, 7], "Human, Dwarf, Night Elf, Gnome");
-        assert_eq!(HORDE, [2, 5, 6, 8], "Orc, Scourge, Tauren, Troll");
+        assert_eq!(
+            ALLIANCE,
+            [1, 3, 4, 7, 10],
+            "Human, Dwarf, Night Elf, Gnome, High Elf"
+        );
+        assert_eq!(
+            HORDE,
+            [2, 5, 6, 8, 9],
+            "Orc, Scourge, Tauren, Troll, Goblin"
+        );
+        assert_eq!(&ALLIANCE[..4], [1, 3, 4, 7]);
+        assert_eq!(&HORDE[..4], [2, 5, 6, 8]);
         let mut all: Vec<u8> = ALLIANCE.iter().chain(&HORDE).copied().collect();
         all.sort_unstable();
-        assert_eq!(all, (1..=8).collect::<Vec<u8>>());
+        assert_eq!(all, (1..=10).collect::<Vec<u8>>());
         assert!(ALLIANCE.windows(2).all(|w| w[0] < w[1]));
         assert!(HORDE.windows(2).all(|w| w[0] < w[1]));
     }

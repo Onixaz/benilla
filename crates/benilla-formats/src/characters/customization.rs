@@ -28,7 +28,9 @@ const SECTION_HAIR: u8 = 3;
 /// A CharSections availability key: `(race, sex, sectionType, variation, color)`.
 type SectionKey = (u8, u8, u8, u8, u8);
 
-/// The playable races, ChrRaces ids 1–8; Goblin (9) and above are not creatable.
+/// The shipped playable races, kept for the 5875 contract tests. Runtime playability comes from
+/// the intersection of `ChrRaces` and `CharBaseInfo`, so patched clients may add races.
+#[cfg(test)]
 const PLAYABLE_RACES: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 
 /// The shipped ChrRaces fileStrings (col 15), guarding [`load_races`]' string columns.
@@ -79,6 +81,17 @@ fn shipped_combos_present(combos: &HashSet<(u8, u8)>) -> Result<()> {
     Ok(())
 }
 
+/// Sorted `ChrRaces ∩ CharBaseInfo`: the races the loaded client actually lets players create.
+fn data_playable_races(displays: &HashMap<u8, (u32, u32)>, combos: &HashSet<(u8, u8)>) -> Vec<u8> {
+    let mut playable: Vec<u8> = displays
+        .keys()
+        .copied()
+        .filter(|race| combos.iter().any(|(r, _)| r == race))
+        .collect();
+    playable.sort_unstable();
+    playable
+}
+
 /// One worn item of a CharStartOutfit row: its ItemDisplayInfo id and its InventoryType.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartOutfitItem {
@@ -121,6 +134,12 @@ impl CharCreateCatalog {
     /// Whether a race may be created as a class (CharBaseInfo less `UNUSED_COMBOS`).
     pub fn allows(&self, race: u8, class: u8) -> bool {
         self.combos.contains(&(race, class))
+    }
+
+    /// Whether the loaded client offers this race: it has a body row and at least one creatable
+    /// race/class pair. This excludes vanilla's dormant Goblin row while admitting patched races.
+    pub fn is_playable_race(&self, race: u8) -> bool {
+        self.displays.contains_key(&race) && self.combos.iter().any(|(r, _)| *r == race)
     }
 
     /// The ChrRaces fileString for a race (`"Human"`, `"Scourge"`), the GlueStrings key stem.
@@ -176,8 +195,13 @@ impl CharCreateCatalog {
         let hair_geo = load_hair_geosets(chain)?;
         let facial = load_facial_hair_styles(chain)?;
 
+        // The client builds this list from data: a race is creatable when it has both a ChrRaces
+        // row and at least one CharBaseInfo row. Vanilla yields 1–8; Turtle-derived data adds its
+        // playable races without teaching this parser their ids in advance.
+        let playable = data_playable_races(&displays, &combos);
+
         let mut ranges = HashMap::new();
-        for race in PLAYABLE_RACES {
+        for race in playable {
             for sex in [0u8, 1] {
                 ranges.insert(
                     (race, sex),
@@ -232,7 +256,14 @@ impl CharCreateCatalog {
                 );
             }
         }
-        for race in PLAYABLE_RACES {
+        // Guard every data-derived playable race, including patched additions.
+        let playable: Vec<u8> = self
+            .displays
+            .keys()
+            .copied()
+            .filter(|race| self.combos.iter().any(|(r, _)| r == race))
+            .collect();
+        for race in playable {
             for sex in [0u8, 1] {
                 if self.body_display(race, sex).unwrap_or(0) == 0 {
                     bail!("ChrRaces: race {race} sex {sex} has no body displayId");
@@ -259,8 +290,9 @@ impl CharCreateCatalog {
     }
 }
 
-/// ChrRaces (29 fields, 116-byte records) → per playable race: displayIds (cols 4/5), fileString
-/// (15), facial-hair (26/27) and hair (28) tokens; other string columns are read as ignored `u32`s.
+/// ChrRaces (29 fields, 116-byte records) → per race: displayIds (cols 4/5), fileString (15),
+/// facial-hair (26/27) and hair (28) tokens. Playability is decided later by intersecting these
+/// rows with `CharBaseInfo`; retaining every row is what lets patched clients add races.
 #[allow(clippy::type_complexity)] // one pass over one DBC → the catalog's three race-keyed maps
 fn load_races(
     chain: &mut Chain,
@@ -287,9 +319,6 @@ fn load_races(
     for r in rs.records() {
         let Some(race) = u32_at(r, 0) else { continue };
         let race = race as u8;
-        if !PLAYABLE_RACES.contains(&race) {
-            continue;
-        }
         if let (Some(male), Some(female)) = (u32_at(r, 4), u32_at(r, 5)) {
             displays.insert(race, (male, female));
         }
@@ -545,6 +574,18 @@ mod tests {
     }
 
     #[test]
+    fn patched_races_come_from_chr_races_intersect_char_base_info() {
+        let displays = HashMap::from([
+            (1, (49, 50)),
+            (9, (1_009, 2_009)),
+            (10, (1_010, 2_010)),
+            (11, (1_011, 2_011)), // a ChrRaces-only row is not playable
+        ]);
+        let combos = HashSet::from([(1, 1), (9, 1), (9, 8), (10, 2)]);
+        assert_eq!(data_playable_races(&displays, &combos), [1, 9, 10]);
+    }
+
+    #[test]
     fn char_create_catalog_matches_the_5875_dbcs() {
         let data = crate::wow_data_or_skip!();
         let mut chain = crate::open_chain(&data).expect("open chain");
@@ -586,6 +627,10 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             "Dwarf offers exactly Warrior/Paladin/Hunter/Rogue/Priest — no Mage (the dead \
              CharBaseInfo row must not reach the create screen)"
+        );
+        assert!(
+            !cat.is_playable_race(9),
+            "5875's dormant Goblin row stays hidden"
         );
 
         // The glue tokens against the shipped rows, pinning cols 26/27's male/female order; no
