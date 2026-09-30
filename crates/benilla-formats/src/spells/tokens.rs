@@ -533,14 +533,12 @@ pub fn substitute(text: &str, spell: &SpellDisplay, ctx: &TokenContext) -> Strin
         };
         match token_value(letter, slot, target, ctx, scale, level) {
             Some((sub, val)) => {
-                // Deviation: the older arms always key the `$l` plural. The reference's `$a`,
-                // `$d`, `$t`, `$e`, `$c`, `$p` and `$z` arms leave `[0xbe0b84]` alone, so its `$l`
+                // Deviation: every token keys the `$l` plural. The reference's `$a`, `$d`, `$t`,
+                // `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its `$l`
                 // keys on the number before them, and Blizzard's "$s1 … every $t1
                 // $lsecond:seconds;" reads "every 1 seconds" in 1.12.1. We print the grammar the
                 // text means.
-                if !matches!(letter, 'f' | 'F') {
-                    last_value = val;
-                }
+                last_value = val;
                 out.push_str(&sub);
             }
             None => out.push_str(&text[start..i]), // unknown token: keep raw
@@ -1382,6 +1380,22 @@ mod tests {
                 &c
             ),
             "25 Frost damage every 1 second"
+        );
+        // `$f` and `$F` key it too, though their arms (`507ff7`, `508025`) leave it alone.
+        let multiplier = SpellDisplay {
+            effect_base_points: [24, 0, 0],
+            effect_base_dice: [1, 1, 0],
+            effect_die_sides: [1, 1, 0],
+            damage_multiplier: [1.0, 1.5, 0.0],
+            ..Default::default()
+        };
+        assert_eq!(
+            substitute("$s1 then $F1 $lpoint:points;", &multiplier, &c),
+            "25 then 1 point"
+        );
+        assert_eq!(
+            substitute("$s2 then $f2 $lpoint:points;", &multiplier, &c),
+            "1 then 1.5 points"
         );
     }
 
