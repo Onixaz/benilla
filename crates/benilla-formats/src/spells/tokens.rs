@@ -55,8 +55,8 @@ fn keyed(ctx: &TokenContext, key: &str, args: &[TokenNumber]) -> Option<String> 
 }
 
 /// `"%.1f"` (`0x84f398`).
-fn tenths(ctx: &TokenContext, v: f32) -> String {
-    (ctx.printf)("%.1f", &[TokenNumber::Float(f64::from(v))])
+fn tenths(ctx: &TokenContext, v: impl Into<f64>) -> String {
+    (ctx.printf)("%.1f", &[TokenNumber::Float(v.into())])
 }
 
 /// `0x6e3130` for the active player (`0x6e318d`: `CGPlayer`'s `[vtbl+0xa8]`, `0x5ea690`).
@@ -309,14 +309,14 @@ fn token_value(
             Some((v.to_string(), f64::from(v)))
         }
         'f' => {
-            // `507ff7` / `508025`: the damage multiplier after the prefix scale. Uppercase
-            // rounds half away from zero, while lowercase prints one decimal.
-            let v = d.damage_multiplier[slot] * scale;
+            // `507ff7` / `508025`: the scale times `DmgMultiplier`, exact at the x87's PC_53.
+            let v = f64::from(scale) * f64::from(d.damage_multiplier[slot]);
             if letter == 'F' {
+                // ±0.5 by the sign, then chopped by `0x40a2b0` (`50802f`-`50804a`).
                 let n = v.round() as i32;
                 Some((n.to_string(), f64::from(n)))
             } else {
-                Some((tenths(ctx, v), f64::from(v)))
+                Some((tenths(ctx, v), v))
             }
         }
         'i' => {
@@ -1416,6 +1416,21 @@ mod tests {
             substitute("$42u $*100;42F1 $lone:many;", &empty, &c),
             "5 50 many"
         );
+    }
+
+    /// `$f` and `$F` (`507ff7`, `508025`) multiply on the x87 at PC_53, so the product of the two
+    /// floats is exact: rounded to a float first, these would read 1.1 and 3.
+    #[test]
+    fn the_multiplier_tokens_multiply_in_double() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        let d = SpellDisplay {
+            damage_multiplier: [0.23, 0.833_333_3, 0.0],
+            ..Default::default()
+        };
+        assert_eq!(substitute("$*5;f1", &d, &c), "1.2");
+        assert_eq!(substitute("$*3;F2", &d, &c), "2");
     }
 
     #[test]
