@@ -18,9 +18,9 @@ pub const RACE_HUMAN: u8 = 0x1;
 pub const CLASS_WARRIOR: u8 = 0x1;
 pub const GENDER_MALE: u8 = 0x0;
 
-/// A `CMSG_CHAR_CREATE` request for [`super::char_create`]. The outfit id is always 0 on the wire:
-/// the server ignores it and picks the start gear (vmangos `CharacterHandler.cpp:310`). The
-/// appearance bytes must be valid `CharSections` indices or `Player::ValidateAppearance` refuses.
+/// A `CMSG_CHAR_CREATE` request for [`super::char_create`]. The outfit id and Turtle 1.18.1
+/// challenge mask are always 0 on the wire: this screen offers neither choice. The appearance
+/// bytes must be valid `CharSections` indices or `Player::ValidateAppearance` refuses.
 #[derive(Debug, Clone)]
 pub struct CharCreateReq {
     pub name: String,

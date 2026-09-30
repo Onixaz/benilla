@@ -24,10 +24,10 @@ pub fn auth_session(
     body
 }
 
-/// `CMSG_CHAR_CREATE` body: the name cstring then nine bytes (`Packets/Character.cpp:4-19`); the
-/// last, `outfit_id`, is 0 because the server ignores it (`CharacterHandler.cpp:310`).
+/// `CMSG_CHAR_CREATE` body: the name cstring, the stock nine bytes, then Turtle 1.18.1's `u32`
+/// challenge mask; outfit and challenge are 0 because this screen offers neither choice.
 pub fn char_create(req: &CharCreateReq) -> Vec<u8> {
-    let mut body = Vec::with_capacity(req.name.len() + 10);
+    let mut body = Vec::with_capacity(req.name.len() + 14);
     body.extend_from_slice(req.name.as_bytes());
     body.push(0);
     body.extend_from_slice(&[
@@ -41,6 +41,7 @@ pub fn char_create(req: &CharCreateReq) -> Vec<u8> {
         req.facial_hair,
         0,
     ]);
+    body.extend_from_slice(&0u32.to_le_bytes());
     body
 }
 

@@ -58,8 +58,8 @@ fn client_bodies_golden() {
         hx("f31600000000000054455354555345520044332211070a0d101316191c1f2225282b2e3134373a3d40"),
         "CMSG_AUTH_SESSION body with no secure addons"
     );
-    // CMSG_CHAR_CREATE in vmangos's read order (`Packets/Character.cpp:4-19`): name, race, class,
-    // gender, skin, face, hairStyle, hairColor, facialHair, outfit.
+    // CMSG_CHAR_CREATE in Turtle 1.18.1's read order (`Handlers/CharacterHandler.cpp`): the stock
+    // name, appearance and outfit fields, followed by its u32 challenge mask.
     assert_eq!(
         messages::char_create(&messages::CharCreateReq {
             name: "Benilla".into(),
@@ -72,7 +72,7 @@ fn client_bodies_golden() {
             hair_color: 0,
             facial_hair: 0,
         }),
-        hx("42656e696c6c6100010100000000000000"),
+        hx("42656e696c6c610001010000000000000000000000"),
         "CMSG_CHAR_CREATE body (zero appearance)"
     );
     assert_eq!(
@@ -87,7 +87,7 @@ fn client_bodies_golden() {
             hair_color: 6,
             facial_hair: 7,
         }),
-        hx("42656e696c6c6100010100030405060700"),
+        hx("42656e696c6c610001010003040506070000000000"),
         "CMSG_CHAR_CREATE body (distinct appearance)"
     );
     assert_eq!(
