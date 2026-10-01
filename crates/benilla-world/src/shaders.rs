@@ -15,6 +15,7 @@ pub(crate) fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "shaders/cloud.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/celestial.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/ffx_glow.wgsl");
+    bevy::asset::embedded_asset!(app, "shaders/motion_vector_debug.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/wow_effect.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/static_gx.wgsl");
 }
@@ -53,6 +54,6 @@ mod tests {
             );
         }
         // One per `embedded_asset!` line in `plugin`.
-        assert_eq!(found, 8, "the engine's shader set changed size");
+        assert_eq!(found, 9, "the engine's shader set changed size");
     }
 }

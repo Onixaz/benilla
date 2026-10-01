@@ -136,6 +136,7 @@ pub mod model_fade;
 pub mod model_forms;
 pub mod model_render;
 pub mod modkeys;
+pub mod motion_vectors;
 pub mod particles;
 pub mod ribbons;
 pub mod ride_frame;

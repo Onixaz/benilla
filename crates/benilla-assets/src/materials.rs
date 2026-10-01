@@ -21,7 +21,9 @@ use bevy::shader::ShaderRef;
 /// after Bevy's `AssetPlugin`, whose registry this fills; [`crate::register_asset_loaders`] does.
 pub fn register_shaders(app: &mut App) {
     bevy::asset::embedded_asset!(app, "shaders/terrain.wgsl");
+    bevy::asset::embedded_asset!(app, "shaders/wow_model_skin.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/wow_model.wgsl");
+    bevy::asset::embedded_asset!(app, "shaders/wow_model_prepass.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/wdl.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/liquid.wgsl");
 }
@@ -129,6 +131,14 @@ impl MaterialExtension for WowModelExt {
 
     fn fragment_shader() -> ShaderRef {
         "embedded://benilla_assets/shaders/wow_model.wgsl".into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        "embedded://benilla_assets/shaders/wow_model_prepass.wgsl".into()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        "embedded://benilla_assets/shaders/wow_model_prepass.wgsl".into()
     }
 
     /// The reference writes depth for every M2 batch, transparent ones too, and tests `LEQUAL`,
@@ -324,6 +334,13 @@ pub struct WdlExt {
 }
 
 impl MaterialExtension for WdlExt {
+    // `wdl.wgsl` writes its horizon-depth clamp from the fragment stage. The generic prepass
+    // cannot reproduce that clamp and would let the coarse hull occlude detailed ADT terrain.
+    // It is a static backdrop, not a temporal-vector producer, so retain its forward-only pass.
+    fn enable_prepass() -> bool {
+        false
+    }
+
     fn vertex_shader() -> ShaderRef {
         "embedded://benilla_assets/shaders/wdl.wgsl".into()
     }
@@ -427,6 +444,38 @@ impl MaterialExtension for TerrainExtension {
 
 #[cfg(test)]
 mod tests {
+    /// WDL writes a custom, far-pushed fragment depth. Rendering its raw mesh through Bevy's
+    /// generic prepass would occlude detailed terrain before the forward pass applies that clamp.
+    #[test]
+    fn wdl_stays_out_of_the_generic_prepass() {
+        assert!(
+            !<super::WdlExt as bevy::pbr::MaterialExtension>::enable_prepass(),
+            "the WDL backdrop re-entered Bevy's generic prepass and can occlude detailed terrain"
+        );
+    }
+
+    /// Rigid models retain Bevy's exact helper; only the custom palette-rig path needs paired
+    /// camera-relative positions. This catches a prepass edit that accidentally regresses one
+    /// lane while changing the other.
+    #[test]
+    fn model_prepass_keeps_rigid_motion_stock_and_pairs_rig_history() {
+        let src = include_str!("shaders/wow_model_prepass.wgsl");
+        assert!(
+            src.contains("WOW_RIG_PREVIOUS_PALETTE_ROW_OFFSET")
+                && src.contains("previous_rig_origin")
+                && src.contains("previous_view_uniforms.view_from_world"),
+            "the rigged prepass lost one half of the prior-frame state"
+        );
+        assert!(
+            src.contains("pbr_prepass_functions::calculate_motion_vector(\n        in.world_position,\n        in.previous_world_position,\n    )"),
+            "the rigid prepass must continue to use Bevy's stock motion-vector helper"
+        );
+        assert!(
+            src.contains("view.unjittered_clip_from_world * inverse(view.view_from_world)"),
+            "the rigged branch must project camera-relative positions through the unjittered view"
+        );
+    }
+
     /// The sky depth law for the WMO skybox, the one sky element on the model lane.
     #[test]
     fn the_sky_lane_pins_the_far_depth_at_the_vertex() {
