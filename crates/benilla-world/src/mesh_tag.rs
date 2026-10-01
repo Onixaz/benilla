@@ -24,23 +24,37 @@
 //!
 //! The writers, deconflicted by field and by order:
 //!
-//! 1. `model_fade::apply_render_fade`, the appear and despawn ramps, owns the alpha and the
-//!    material while a `RenderFade` lives; the other alpha writers skip those entities.
-//! 2. `interior::classify_entity_interior` owns the light law of `InteriorLit` parts (their
-//!    non-alpha payload) and their fog bit. The law is where the part stands, re-asked when it
-//!    moves; the fog bit is whether that room is on the camera's chain, re-read every frame. It
-//!    runs through a fade, carrying the alpha; only the material defers to 1, which picks the
-//!    law's blend twin (`FadeMaterials::material_for`).
-//! 3. `model_render::visibility::apply_model_visibility` drives the `DoodadFade` distance fade and
-//!    glow-card dimming, never on a lit interior prop, and owns the fog bit of room-bound WMO
-//!    content (`WmoGroupVis`), the reference's per-group `[0xca7f00]` gate; a WMO part holds no
-//!    `InteriorLit`, so it never meets 2.
-//! 4. `player::apply_self_model_fade`, the first-person feather, runs after 1-3 and owns the self
-//!    body's alpha while it feathers; on the frame it ends it restores the alpha itself (2 carries
-//!    alpha through) and hands the material back to the law.
-//! 5. `entity_shade::update_ground_shade` owns the shade byte of entity parts and runs after 2 to
-//!    re-assert it over 2's exterior reset. The byte shares bits 6..=13 with the probe slot, so it
-//!    writes only through an [`ExteriorPayload`].
+//!   Written ONCE at part spawn ([`rig_bits`]); every runtime writer below preserves it by
+//!   construction (the `with_*` accessors carry bits the writer doesn't own). 11 bits ⇔
+//!   [`MAX_RIG_SLOTS`] concurrent instances.
+//! - **Alpha** (bits 0..=5, BOTH payload modes): the fade alpha as a 6-bit fraction (`63` =
+//!   opaque), multiplying the cutout alpha. 64 steps is past perceptual for the sub-second fade
+//!   ramps that write it (it was u16 pre-0720 — the rig field bought its bits from here). A whole
+//!   payload of `0` is the shader's *untagged ⇒ opaque* sentinel, so the alpha field is never
+//!   legitimately `0` — a true zero alpha writes `1` (≈0, invisible) instead ([`alpha_bits`]).
+//! - **Exterior payload** (the default): bits 6..=13 carry the **ground-shade byte** (`0` = lit,
+//!   `255` = fully MCSH-shadowed): the per-instance mix from the batch's lit sun level toward the
+//!   shaded one (`wow_model.wgsl`). Entities (units/players/GameObjects) ramp it per frame
+//!   ([`crate::entity_shade`]); statics (doodads/props) leave it `0` — their shade is the
+//!   per-material selector (`sun_scale.x`). Bit 14 is the **MATTE-INDOOR flag**
+//!   ([`MATTE_INDOOR_BIT`], MONKEY torch shadows Phase 3A): the classifier's `Matte` law — an
+//!   entity standing INDOORS whose material nonetheless stays in exterior mode (day/night, no
+//!   bake). `wow_model.wgsl` routes such a part to the dynamic-interior lane on it, so a unit
+//!   whose verdict flickers `Bake`↔`Matte` at one spot keeps its lane. Bits 15..=18 are the
+//!   **lane weight** ([`LANE_MASK`], MONKEY portal lane fade): a 4-bit crossfade from the
+//!   exterior result (`0`) to the room result (`15`), so an entity walking through a portal
+//!   blends between the two lanes over the anchor's ramp instead of popping in one frame. It is
+//!   meaningful only alongside bit 14 — [`with_matte_indoor`] writes the pair, and the shader
+//!   mixes by it.
+//! - **Interior probe slot** (interior M2 props/entities — material in interior mode,
+//!   `model_flags.z` set, not a WMO): bits 6..=18 carry the SH-probe TABLE SLOT (see
+//!   [`crate::lighting::PropProbes`]; 8192 slots = 13 bits), alpha and rig ride their fixed
+//!   fields — so a fade (the self-avatar zoom feather, a despawn ramp) and the skin palette both
+//!   compose with the slot through the accessors instead of clobbering it (the pre-0355 layout
+//!   put the slot in the alpha bits: a feathering indoor character lost its probe AND read shade
+//!   byte 0 = the lit exterior intensity — the director's "light jumps outdoor when I zoom in").
+//!   Slot 0 is a valid payload: [`probe_bits`] always carries a non-zero alpha field, so the
+//!   shader's untagged-⇒-opaque `0` sentinel never fires for these.
 //!
 //! A new payload writer claims reserved bits through a typed accessor here, never a whole-payload
 //! convention of its own. Bit 31's one writer, `target::highlight::apply_highlight`, runs in
@@ -71,7 +85,25 @@ const ALPHA_MAX: f32 = 63.0;
 /// Bits 6..=13 of the exterior payload: the ground-shade byte.
 const SHADE_MASK: u32 = 0x0000_3fc0;
 const SHADE_SHIFT: u32 = 6;
-/// Bits 6..=18 of the interior payload: the SH-probe table slot (13 bits, 8192 slots).
+/// Bit 14 of the exterior payload (MONKEY, torch shadows Phase 3A): the part's anchor classified
+/// INDOORS under the `Matte` law — exterior material mode, but the room's dynamic light applies.
+/// Sits in the exterior payload's reserved bits, so [`with_shade`]/[`with_alpha`]/[`with_rig`]
+/// carry it through and the shader's 8-bit shade decode never sees it.
+pub(crate) const MATTE_INDOOR_BIT: u32 = 0x0000_4000;
+/// Bits 15..=18 of the exterior payload (MONKEY, portal lane fade): the **lane weight**, a 4-bit
+/// crossfade `0` (fully exterior-lit) … [`LANE_MAX`] (fully room-lit) that the shader mixes the
+/// two lanes by. It rides beside [`MATTE_INDOOR_BIT`] — the bit says "this part is on the room
+/// lane at all", the field says how far — and like it, sits above the shade byte so
+/// [`with_shade`]/[`with_alpha`]/[`with_rig`]/[`with_interior_fog`] carry it through and
+/// [`with_exterior_reset`] clears it. 16 steps is past perceptual for a half-second ramp (the
+/// same reasoning as the 6-bit alpha), and the four bits are exactly what the exterior payload
+/// had left over.
+const LANE_MASK: u32 = 0x0007_8000;
+const LANE_SHIFT: u32 = 15;
+/// The saturated lane weight — the quantization step count the ramp's owner
+/// (`crate::interior::InteriorAnchor`) rounds its `0..=1` fraction onto.
+pub(crate) const LANE_MAX: u8 = 15;
+/// Bits 6..=18 of the interior payload: the SH-probe table slot (13 bits ⇔ 8192 slots).
 const PROBE_MASK: u32 = 0x0007_ffc0;
 const PROBE_SHIFT: u32 = 6;
 /// Bits 19..=29, both modes: the rig slot, `0` for none.
@@ -110,8 +142,37 @@ pub(crate) fn with_exterior_reset(tag: u32) -> u32 {
     (tag & RIG_MASK) | carried_alpha(tag)
 }
 
-/// A spawned part's initial tag: its rig slot (`0` if unskinned) and starting alpha, the only two
-/// fields a spawner may set; the rest belong to the later read-modify-write writers.
+/// Rewrite a tag as a fresh exterior payload flagged MATTE-INDOOR ([`MATTE_INDOOR_BIT`]) at lane
+/// weight `lane`, preserving the rig and alpha fields: the classifier's `Matte`-law write (MONKEY,
+/// torch shadows Phase 3A) and — since the portal lane fade — every write of a part whose anchor's
+/// crossfade is still in motion, whichever indoor law it is heading for. The shade writer
+/// re-asserts its byte the same frame and carries both the bit and the field through.
+///
+/// The two travel together on purpose: the shader reads the field ONLY under the bit, so a lane
+/// weight can never be mistaken for the reserved zeros of a plain exterior payload. `lane` is
+/// clamped to [`LANE_MAX`] rather than masked — a caller's rounding overshoot must saturate at
+/// "fully room-lit", not wrap to "fully exterior".
+pub(crate) fn with_matte_indoor(tag: u32, lane: u8) -> u32 {
+    with_exterior_reset(tag) | MATTE_INDOOR_BIT | (u32::from(lane.min(LANE_MAX)) << LANE_SHIFT)
+}
+
+/// Read back the lane weight of an exterior-payload tag (`0`..=[`LANE_MAX`]) — the probe readout
+/// and the tests. Meaningless on an interior payload, where these bits are part of the probe slot.
+pub(crate) fn lane_of(tag: u32) -> u8 {
+    ((tag & LANE_MASK) >> LANE_SHIFT) as u8
+}
+
+/// **A spawned part's initial `MeshTag`** — its rig slot and its starting render alpha, the two
+/// fields every spawner sets and the only two it may.
+///
+/// Six gameplay spawners wrote `rig_bits(slot) | alpha_bits(alpha)` by hand, which is the same
+/// composition each time and the only legitimate one: the payload's other fields (the shade byte,
+/// the interior probe slot, the fog and highlight flags) belong to writers that run later and
+/// read-modify-write. Publishing the pair as one call is what stops a seventh spawner inventing
+/// an ad-hoc whole-payload convention, which decision 0066's rule forbids and 0173's layout
+/// depends on.
+///
+/// `rig_slot` is `0` for an unskinned part — [`crate::rig_palette`] never allocates slot 0.
 pub fn spawn_tag(rig_slot: u16, alpha: f32) -> u32 {
     rig_bits(rig_slot) | alpha_bits(alpha)
 }
@@ -209,11 +270,17 @@ pub fn describe(tag: u32) -> String {
         (false, true) => " fog",
         (false, false) => "",
     };
-    // The raw masks, with no `ExteriorPayload` witness: printing both readings is the point.
+    // Both readings come off the RAW masks, deliberately: this is the one caller that has no
+    // material context and wants none — printing the ambiguity IS its job, so it is the one place
+    // that must not take an [`ExteriorPayload`] witness (it could not honestly produce one).
+    // MONKEY (portal lane fade): the lane weight is printed with the exterior reading (`shade`),
+    // because it shares the same law -- on an interior payload these bits are inside the `slot`
+    // beside it, exactly as the shade byte is.
     format!(
-        "{tag:#010x}{flags} α {:.3} shade {} / slot {} rig {}",
+        "{tag:#010x}{flags} α {:.3} shade {} lane {} / slot {} rig {}",
         alpha_of(tag),
         (tag & SHADE_MASK) >> SHADE_SHIFT,
+        lane_of(tag),
         (tag & PROBE_MASK) >> PROBE_SHIFT,
         rig_of(tag),
     )
@@ -338,6 +405,63 @@ mod tests {
         assert_eq!((probe_bits(6660) & PROBE_MASK) >> PROBE_SHIFT, 6660);
     }
 
+    /// MONKEY (torch shadows Phase 3A + portal lane fade): the Matte-law indoor flag rides the
+    /// exterior payload's reserved bit 14 and the lane weight bits 15..=18 — the per-frame
+    /// shade/alpha/rig/fog writers carry BOTH, the shade decode never sees either, and the
+    /// exterior reclaim clears both. The lane field is what makes the flag a crossfade instead of
+    /// a switch, so anything that carried the bit and dropped the field would silently snap an
+    /// entity to fully room-lit the first frame `entity_shade` re-asserted its byte.
+    #[test]
+    fn matte_indoor_bit_survives_the_field_writers_and_clears_on_exterior() {
+        let t = with_matte_indoor(rig_bits(9) | alpha_bits(0.5), 6);
+        assert_eq!(t & MATTE_INDOOR_BIT, MATTE_INDOOR_BIT);
+        assert_eq!(lane_of(t), 6);
+        assert_eq!(rig_of(t), 9);
+        assert_eq!(t & ALPHA_MASK, alpha_bits(0.5));
+        assert_eq!(
+            with_shade(t, 255, ext()) & MATTE_INDOOR_BIT,
+            MATTE_INDOOR_BIT
+        );
+        assert_eq!(lane_of(with_shade(t, 255, ext())), 6);
+        assert_eq!(shade_of(with_shade(t, 255, ext()), ext()), 255);
+        assert_eq!(with_alpha(t, 0.25) & MATTE_INDOOR_BIT, MATTE_INDOOR_BIT);
+        assert_eq!(lane_of(with_alpha(t, 0.25)), 6);
+        assert_eq!(with_rig(t, 3) & MATTE_INDOOR_BIT, MATTE_INDOOR_BIT);
+        assert_eq!(lane_of(with_rig(t, 3)), 6);
+        assert_eq!(
+            with_interior_fog(t, true) & MATTE_INDOOR_BIT,
+            MATTE_INDOOR_BIT
+        );
+        assert_eq!(lane_of(with_interior_fog(t, true)), 6);
+        assert_eq!(with_exterior_reset(t) & MATTE_INDOOR_BIT, 0);
+        assert_eq!(lane_of(with_exterior_reset(t)), 0);
+        assert_eq!(shade_of(t, ext()), 0, "the flag is outside the shade byte");
+        // …and the lane is outside it too, at BOTH ends of its range: a saturated lane must not
+        // read back as a shade byte of 240 (the failure the pair of decodes is here to catch).
+        let full = with_matte_indoor(alpha_bits(1.0), LANE_MAX);
+        assert_eq!(lane_of(full), LANE_MAX);
+        assert_eq!(shade_of(full, ext()), 0);
+        assert_eq!(shade_of(with_shade(full, 128, ext()), ext()), 128);
+        assert_eq!(lane_of(with_shade(full, 128, ext())), LANE_MAX);
+        // An overshooting caller SATURATES rather than wrapping into the probe/rig neighbourhood.
+        let over = with_matte_indoor(alpha_bits(1.0), 200);
+        assert_eq!(lane_of(over), LANE_MAX);
+        assert_eq!(
+            over & (RIG_MASK | SHADE_MASK),
+            0,
+            "no spill into its neighbours"
+        );
+        // Lane 0 under the flag is legal (the first tick of a ramp) and is NOT the exterior reset:
+        // the bit is what routes the shader into the mix, the field is only its weight.
+        let zero = with_matte_indoor(alpha_bits(1.0), 0);
+        assert_eq!(lane_of(zero), 0);
+        assert_ne!(zero & MATTE_INDOOR_BIT, 0);
+    }
+
+    /// Decision 0755: the classifier's whole-payload rewrites carry the tag's ALPHA field, which
+    /// is what lets a part change light law while a fade owns its ramp. Before this they wrote
+    /// `alpha_bits(1.0)`, so the classifier had to be locked out of fading parts entirely — and a
+    /// streamed indoor entity therefore had no interior law until its 2 s appear ramp latched.
     #[test]
     fn a_law_rewrite_carries_the_fade_alpha() {
         let mid_ramp = alpha_bits(0.25);

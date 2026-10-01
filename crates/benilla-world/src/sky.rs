@@ -17,7 +17,7 @@ use bevy::pbr::{
 };
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+    AsBindGroup, Buffer, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
 use bevy::shader::ShaderRef;
 
@@ -32,6 +32,7 @@ pub type SkyMaterial = ExtendedMaterial<StandardMaterial, SkyExt>;
 /// The five sky stops, zenith to horizon, and the fog colour on one binding (100); `sky.wgsl`'s
 /// struct must match this field order.
 #[derive(Asset, AsBindGroup, Clone, TypePath)]
+#[bind_group_data(SkyFxKey)]
 pub struct SkyExt {
     /// `SkyColor0`: zenith (90°).
     #[uniform(100)]
@@ -55,6 +56,41 @@ pub struct SkyExt {
     /// none), `y` the sun azimuth `atan2(sun.z, sun.x)` in radians, `zw` reserved.
     #[uniform(100)]
     pub(crate) warp: Vec4,
+    /// MONKEY (sky): `x` the [`crate::sky_fx::SkyQuality`] tier (0 = Classic, the fields below
+    /// unused), `y` reserved (0; the clock is [`Self::clock`]), `z` the night-sky alpha, `w` the
+    /// sun-glow strength.
+    #[uniform(100)]
+    pub(crate) fx: Vec4,
+    /// MONKEY (sky): camera to the visible sun (`xyz`).
+    #[uniform(100)]
+    pub(crate) sun: Vec4,
+    /// MONKEY (sky): the glow colour, gamma (`rgb`).
+    #[uniform(100)]
+    pub(crate) glow: Vec4,
+    /// MONKEY (fog): MonkeyFrame fog rows B-D so the dome horizon uses the world's far colour.
+    #[uniform(100)]
+    pub(crate) mf_fog_b: Vec4,
+    #[uniform(100)]
+    pub(crate) mf_fog_c: Vec4,
+    #[uniform(100)]
+    pub(crate) mf_fog_d: Vec4,
+    /// MONKEY (polish): the shared sky clock ([`crate::sky_fx::SkyClockBuffer`]), outside the
+    /// uniform so the clock never rewrites the material.
+    #[storage(101, read_only, buffer)]
+    pub(crate) clock: Buffer,
+}
+
+/// MONKEY (sky): the pipeline key: Enhanced/High compile `SKY_FX` into `sky.wgsl`; Classic keeps
+/// the reference's code with nothing added.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SkyFxKey {
+    fx: bool,
+}
+
+impl From<&SkyExt> for SkyFxKey {
+    fn from(e: &SkyExt) -> Self {
+        Self { fx: e.fx.x >= 0.5 }
+    }
 }
 
 impl MaterialExtension for SkyExt {
@@ -73,8 +109,14 @@ impl MaterialExtension for SkyExt {
         _pipeline: &MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialExtensionKey<Self>,
+        key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        // MONKEY (sky): the Enhanced/High branch.
+        if key.bind_group_data.fx {
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push("SKY_FX".into());
+            }
+        }
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.depth_write_enabled = false;
         }
@@ -100,7 +142,10 @@ impl Plugin for SkyPlugin {
                 (
                     // Reads the resolved atmosphere: unordered, it would paint last frame's
                     // palette, the underwater one on a surfacing frame.
-                    update_sky_colors.in_set(crate::lighting::LightingConsumeSet),
+                    // MONKEY (fix-sky): after the cloud tile, so the glow reads this frame's cover.
+                    update_sky_colors
+                        .in_set(crate::lighting::LightingConsumeSet)
+                        .after(crate::clouds::CloudTick),
                     // The skybox and submersion gates must read their settled resolves.
                     apply_sky_visibility
                         .after(crate::skybox::SkyboxResolve)
@@ -166,7 +211,11 @@ fn setup_sky(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<SkyMaterial>>,
+    clock: Option<Res<crate::sky_fx::SkyClockBuffer>>,
 ) {
+    let Some(clock) = clock else {
+        return;
+    };
     let mesh = meshes.add(dome_mesh());
     // Seeded with the neutral-day fallback; `update_sky_colors` overwrites from Light.dbc each frame.
     let material = materials.add(SkyMaterial {
@@ -183,6 +232,15 @@ fn setup_sky(
             sky4: col([0.78, 0.86, 0.95]),
             fog: col([0.55, 0.72, 0.92]),
             warp: Vec4::ZERO, // update_sky_colors fills S + sun azimuth each frame
+            // MONKEY (sky): Classic until update_sky_colors reads the tier.
+            fx: Vec4::ZERO,
+            sun: Vec4::Y,
+            glow: Vec4::ZERO,
+            // MONKEY (fog): zero rows leave Classic unchanged.
+            mf_fog_b: Vec4::ZERO,
+            mf_fog_c: Vec4::ZERO,
+            mf_fog_d: Vec4::ZERO,
+            clock: clock.0.clone(),
         },
     });
     commands.spawn((
@@ -242,8 +300,14 @@ fn apply_sky_visibility(
 }
 
 /// Push the time-of-day sky stops and fog colour (`WowLighting`) into the dome material.
+#[allow(clippy::too_many_arguments)]
 fn update_sky_colors(
     light: Res<WowLighting>,
+    // MONKEY (sky): the tier and the cloud cover over the sun.
+    quality: Res<crate::sky_fx::SkyQuality>,
+    clouds: Res<crate::clouds::CloudCoverage>,
+    // MONKEY (fog): the Modern fog rows for the shared horizon colour.
+    monkey: Res<crate::lighting::MonkeyFrame>,
     dome: Query<&MeshMaterial3d<SkyMaterial>, With<Sky>>,
     mut materials: ResMut<Assets<SkyMaterial>>,
 ) {
@@ -270,11 +334,26 @@ fn update_sky_colors(
         0.0,
         0.0,
     );
+    // MONKEY (sky): the Enhanced/High inputs; all zero at Classic so the write gate stays quiet.
+    let (fx, sun_v, glow) = sky_fx_inputs(&light, *quality, &clouds);
+    // MONKEY (fog): rows B-D as packed for the light buffer; clock lanes are not read here.
+    let rows = monkey.pack(0.0, 0.0);
+    let mf_fog = [
+        Vec4::from_array(rows[1]),
+        Vec4::from_array(rows[2]),
+        Vec4::from_array(rows[3]),
+    ];
     benilla_assets::write_gated(
         &mut materials,
         &handle.0,
         |m| {
-            m.extension.sky0 != sky[0]
+            m.extension.fx != fx
+                || m.extension.sun != sun_v
+                || m.extension.glow != glow
+                || m.extension.mf_fog_b != mf_fog[0]
+                || m.extension.mf_fog_c != mf_fog[1]
+                || m.extension.mf_fog_d != mf_fog[2]
+                || m.extension.sky0 != sky[0]
                 || m.extension.sky1 != sky[1]
                 || m.extension.sky2 != sky[2]
                 || m.extension.sky3 != sky[3]
@@ -290,6 +369,40 @@ fn update_sky_colors(
             m.extension.sky4 = sky[4];
             m.extension.fog = fog;
             m.extension.warp = warp;
+            m.extension.fx = fx;
+            m.extension.sun = sun_v;
+            m.extension.glow = glow;
+            m.extension.mf_fog_b = mf_fog[0];
+            m.extension.mf_fog_c = mf_fog[1];
+            m.extension.mf_fog_d = mf_fog[2];
         },
     );
+}
+
+/// MONKEY (sky): the dome's Enhanced/High uniforms, `(fx, sun, glow)`; zeros at Classic.
+fn sky_fx_inputs(
+    light: &WowLighting,
+    quality: crate::sky_fx::SkyQuality,
+    clouds: &crate::clouds::CloudCoverage,
+) -> (Vec4, Vec4, Vec4) {
+    if !quality.enhanced() {
+        return (Vec4::ZERO, Vec4::Y, Vec4::ZERO);
+    }
+    let sun = light.celestial_dir.normalize_or(Vec3::Y);
+    // The cover at the glare point, the same sample the flare's occlusion reads.
+    let cover = clouds.coverage(sun * 12.0);
+    let strength = crate::sky_fx::glow_strength(sun.y, cover, light.storm_bcc);
+    // Warm toward the sun colour, grounded in the fog colour so dusk glows orange, noon pale.
+    let tint = Vec3::from(light.celestial_tint);
+    let fog = Vec3::from(light.fog_color);
+    let glow = fog.lerp(tint, 0.6);
+    // The night sky follows the star curve, thinned by storm weather.
+    let night = (light.star_alpha * (1.0 - light.storm_bcc)).clamp(0.0, 1.0);
+    // Quantized like every other lane here, so an idle frame writes nothing.
+    let q = |v: f32| benilla_assets::quantize(v, 4096.0);
+    (
+        Vec4::new(f32::from(quality.0), 0.0, q(night), q(strength)),
+        Vec4::new(q(sun.x), q(sun.y), q(sun.z), 0.0),
+        Vec4::new(q(glow.x), q(glow.y), q(glow.z), 0.0),
+    )
 }

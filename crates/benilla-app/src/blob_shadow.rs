@@ -39,9 +39,14 @@ use bevy::prelude::*;
 use crate::creature_anim::AnimData;
 use crate::net::{Embodied, NetEntity};
 use benilla_world::decal::{DecalFrame, WorldDecal};
+// MONKEY (moon shadows): the oval now yields to a NIGHT cast as well as a day one, so it needs the
+// same two numbers the packer weights that cast with.
+use crate::character_shadow::CharacterShadowReady;
+use crate::shadow_core::{ShadowFrame, ShadowSet};
+use benilla_world::lighting::ShadowHandover;
 use benilla_world::particles::buffer::{begin_effect_frame, EffectVertex};
-use benilla_world::schedule::WorldStage;
 use benilla_world::view::WorldCamera;
+use benilla_world::wmo_portal::UnitWmoRoom;
 
 /// The reference's shadow disc, created by `0x6d8070`.
 const SHADOW_TEXTURE: &str = "mpq://textures/shadowblob.blp";
@@ -49,6 +54,10 @@ const SHADOW_TEXTURE: &str = "mpq://textures/shadowblob.blp";
 const BOX_CLAMP: f32 = 5.0;
 /// The reference's degenerate-box epsilon (`[0x8029d4]`).
 const DEGENERATE_EPS: f32 = 2.384e-7;
+/// MONKEY (night blob): the realtime lane's edge band — mirrors `SHADOW_EDGE_BAND` in
+/// `shadow_hook.wgsl`, where the realtime shadow lightens over the last yards of the cascade.
+/// The oval fades back IN across the same band, so the handover is a crossfade at both ends.
+const SHADOW_EDGE_BAND: f32 = 14.0;
 
 /// One unit's shadow record, a top-level entity despawned with its owner.
 #[derive(Component)]
@@ -86,13 +95,16 @@ impl Plugin for BlobShadowPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_shadow_assets)
             .add_systems(
-                Update,
+                PostUpdate,
                 (sync_shadows, update_shadows)
                     .chain()
-                    // After net motion and input, so the decal follows this frame's transforms.
-                    .after(WorldStage::Input),
+                    // MONKEY (moon shadows): after ALL Update work (resolve + strength bridge)
+                    // and this frame's rig verdict. Push only after the blob has consumed it.
+                    .after(ShadowSet::Rig)
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .before(push_shadows),
             )
-            // After the frame's stream clear.
+            // The stream push: after both the frame's stream clear and the blob cache rebuild.
             .add_systems(PostUpdate, push_shadows.after(begin_effect_frame));
     }
 }
@@ -156,11 +168,20 @@ fn sync_shadows(
 /// reaches zero, or no receiving surface is in the box (the reference's no-ground gate).
 #[allow(clippy::type_complexity)]
 fn update_shadows(
+    video: Res<crate::video::VideoConfig>,
     time: Res<Time>,
     catalog: Option<Res<AnimData>>,
     shadow_assets: Option<Res<ShadowAssets>>,
     images: Res<Assets<Image>>,
     decals: WorldDecal,
+    // MONKEY (moon shadows): SAME acknowledged weight as the packed receivers, plus actual
+    // per-unit caster readiness. The cvar alone cannot promise a silhouette exists.
+    handover: Res<ShadowHandover>,
+    // Missing core/character plugins are a valid no-silhouette state: keep the oval there too.
+    shadow_frame: Option<Res<ShadowFrame>>,
+    ready: Option<Res<CharacterShadowReady>>,
+    // …and the camera, for the realtime lane's EDGE fade (its cascade ends at `shadowDistance`).
+    cam_pos: Query<&GlobalTransform, With<WorldCamera>>,
     unit_alpha: benilla_world::model_fade::UnitRenderAlpha,
     owners: Query<
         (
@@ -170,6 +191,10 @@ fn update_shadows(
             Option<&crate::entities::mount::MountChild>,
             // The exterior-scene election's verdict on the root, after propagation.
             Option<&InheritedVisibility>,
+            // …and the unit's WMO room. `Some(room)` = indoors — the realtime SUN shadow is gated
+            // out of interiors, so an INDOOR unit keeps its oval even when `characterShadows` is on
+            // (otherwise it would have no ground shadow at all). Absent / no-room = outdoors.
+            Option<&UnitWmoRoom>,
         ),
         Without<BlobShadow>,
     >,
@@ -181,6 +206,12 @@ fn update_shadows(
     // `RUST_LOG=benilla_app::blob_shadow=debug` (a `benilla::` filter matches nothing).
     mut census_at: Local<f32>,
 ) {
+    // MONKEY (moon shadows): a time jump or pending aim must restore the oval in the SAME
+    // frame that the receiver goes fully lit. Do not independently reconstruct the clock weight.
+    let lane_strength = handover.weight.abs();
+    // No camera yet → treat every unit as beyond the cascade, i.e. keep its oval. Failing toward
+    // "has a shadow" is the safe direction for a lane whose bug is a missing shadow.
+    let camera_pos = cam_pos.iter().next().map(GlobalTransform::translation);
     let now = time.elapsed_secs();
     let census = now >= *census_at;
     if census {
@@ -193,12 +224,39 @@ fn update_shadows(
     let surface_count = decals.receiver_count();
     for (shadow, mut key, mut verts) in &mut shadows {
         n_total += 1;
-        let Ok((unit, anims, is_self, mount_child, drawn)) = owners.get(shadow.owner) else {
+        let Ok((unit, anims, is_self, mount_child, drawn, room)) = owners.get(shadow.owner) else {
             // `sync_shadows` despawns it next frame.
             hide(&mut key, &mut verts);
             n_no_owner += 1;
             continue;
         };
+        // `characterShadows`: the realtime cast owns OUTDOOR units, so the oval yields to it there
+        // (no double shadow). INDOOR units (`UnitWmoRoom::room()` = Some) keep it at full strength —
+        // the realtime sun shadow is gated out of interiors, so without this an indoor unit has no
+        // ground shadow at all. Absent room component / no-room claim = outdoors.
+        //
+        // MONKEY (night blob): "yields to it" is now proportional to how much the realtime lane
+        // actually casts for THIS unit — full oval at night and past the cascade edge, none in
+        // broad daylight up close, a crossfade between. Below a colour step of oval there is
+        // nothing left to draw, so that stays the early-out the hard hide used to be.
+        let indoors = room.is_some_and(|r| r.room().is_some());
+        let mut lane_w = 1.0;
+        if video.character_shadows
+            && !indoors
+            && shadow_frame
+                .as_ref()
+                .is_some_and(|frame| frame.active && !frame.suspended)
+            && ready
+                .as_ref()
+                .is_some_and(|ready| ready.0.contains(&shadow.owner))
+        {
+            let cam_dist = camera_pos.map_or(f32::INFINITY, |c| unit.translation.distance(c));
+            lane_w = blob_weight(lane_strength, cam_dist, video.shadow_distance);
+            if lane_w <= 1.0 / 255.0 {
+                hide(&mut key, &mut verts);
+                continue;
+            }
+        }
         // The visibility deviation (module docs): an undrawn owner casts nothing.
         if !drawn.is_none_or(|v| v.get()) {
             hide(&mut key, &mut verts);
@@ -237,7 +295,13 @@ fn update_shadows(
         }
         // The unit's render alpha from the root, which also tells a pending appear fade (zero)
         // from a settled unit, and carries the first-person fade.
-        let alpha = unit_alpha.get(shadow.owner);
+        let mut alpha = unit_alpha.get(shadow.owner);
+        // MONKEY (night blob): the realtime-lane handover rides the SAME alpha the spawn/despawn
+        // fades do — the oval is a Multiply decal, so scaling its alpha scales its darkening, and
+        // `ShadowKey::alpha` already re-arms the projection when it moves by a colour step. `1.0`
+        // whenever the realtime lane is off, indoors, or contributing nothing, so the shipped
+        // default path is untouched.
+        alpha *= lane_w;
         if alpha <= 0.0 {
             hide(&mut key, &mut verts);
             continue;
@@ -450,6 +514,31 @@ fn key_changed(a: &ShadowKey, b: &ShadowKey) -> bool {
         || a.surfaces != b.surfaces
 }
 
+/// MONKEY (night blob): the realtime sun lane's DAY strength — 0 at or below the horizon, 1 by
+/// ~12° of elevation, smoothstepped. A three-line mirror of `sun_shadow_strength` in
+/// `benilla_world::lighting::global_light` (private there; that copy is what gets packed into the
+/// shader's `night` scalar). The pair is pinned by `oval_is_the_complement_of_the_realtime_lane`
+/// below — if the curve is ever tuned, tune both or the handover gains a seam.
+#[cfg(test)]
+fn sun_shadow_strength(sun_height: f32) -> f32 {
+    let t = (sun_height / 0.208).clamp(0.0, 1.0); // 0.208 ≈ sin(12°)
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// MONKEY (night blob): how much OVAL a unit still wears while `characterShadows` owns it.
+///
+/// `shadow_hook.wgsl::realtime_shadow` returns `1 − (1 − shadow) · night · (1 − edge_fade)`, so
+/// `night · (1 − edge_fade)` is precisely the fraction of a realtime cast that survives to the
+/// screen. The oval takes the COMPLEMENT of that: full where the realtime lane lands nothing (all
+/// night; past the cascade's last [`SHADOW_EDGE_BAND`] yards), zero where it lands everything
+/// (daylight, close in), a continuous crossfade through dusk and dawn and across the edge band —
+/// so neither shadow pops in or out.
+fn blob_weight(sun_strength: f32, cam_dist: f32, shadow_range: f32) -> f32 {
+    let t = ((cam_dist - (shadow_range - SHADOW_EDGE_BAND)) / SHADOW_EDGE_BAND).clamp(0.0, 1.0);
+    let edge_fade = t * t * (3.0 - 2.0 * t);
+    (1.0 - sun_strength.clamp(0.0, 1.0) * (1.0 - edge_fade)).clamp(0.0, 1.0)
+}
+
 /// The reference's trapezoid alpha ramp (`0x6d81a0`/`0x6d82d0`): over `x = 12u`, `x/2` below 2,
 /// 1 through 10, `(12-x)/2` after.
 fn shadow_ramp(u: f32) -> f32 {
@@ -480,6 +569,80 @@ mod tests {
         // Out-of-range clamps, never negative.
         assert_eq!(shadow_ramp(-1.0), 0.0);
         assert_eq!(shadow_ramp(2.0), 0.0);
+    }
+
+    /// MONKEY (night blob): the oval is the exact complement of what the realtime lane casts —
+    /// gone in daylight up close (the old hide), FULL at night (the bug: the sun lane's `night`
+    /// scalar is 0 under the horizon, so nothing was casting and nothing was drawing either), and
+    /// full again past the cascade's edge band. Monotone in between, so no pop at dusk or dawn.
+    #[test]
+    fn oval_is_the_complement_of_the_realtime_lane() {
+        // Sun down (and the whole night): the realtime lane casts nothing → the full oval.
+        assert_eq!(sun_shadow_strength(-0.3), 0.0);
+        assert_eq!(blob_weight(sun_shadow_strength(-0.3), 10.0, 70.0), 1.0);
+        // High sun, well inside the cascade: the realtime cast owns it → no oval.
+        assert_eq!(sun_shadow_strength(0.9), 1.0);
+        assert_eq!(blob_weight(sun_shadow_strength(0.9), 10.0, 70.0), 0.0);
+        // Same high sun, but past the cascade edge: the realtime cast has faded → the oval is back.
+        assert_eq!(blob_weight(sun_shadow_strength(0.9), 80.0, 70.0), 1.0);
+        // Dusk sweeps the weight monotonically from 0 up to 1 with no jump.
+        let mut prev = 0.0;
+        for step in 0..=20 {
+            let height = 0.25 - 0.25 * step as f32 / 20.0; // ~14° down to the horizon
+            let w = blob_weight(sun_shadow_strength(height), 10.0, 70.0);
+            assert!(
+                w >= prev - 1e-6,
+                "dusk weight went backwards at step {step}"
+            );
+            assert!(w - prev < 0.35, "dusk weight jumped at step {step}");
+            prev = w;
+        }
+        assert!((prev - 1.0).abs() < 1e-6);
+    }
+
+    /// MONKEY (moon shadows): the oval yields to the NIGHT cast by exactly what that cast lands.
+    ///
+    /// The bug this forbids is the one the feature creates if the blob is left alone: a unit at
+    /// midnight now HAS a real silhouette shadow, and an unfaded oval under it is a second,
+    /// differently-shaped shadow in the same place. The complement law already handles that — what
+    /// has to hold is that the moon's weight enters it the same way the sun's does, and that
+    /// `moonShadowStrength 0` puts the full oval back, bit for bit.
+    ///
+    /// The sum is exact rather than approximate because the two weights are mutually exclusive
+    /// (`benilla_world::lighting::moon_shadow_weight`, swept over the whole game day by its own
+    /// test), so `sun + moon` IS the realtime lane's total strength at every instant.
+    #[test]
+    fn the_oval_yields_to_a_moon_cast_by_exactly_its_strength() {
+        // Midnight, close in: the sun casts nothing, the moon casts at the shipped 0.35.
+        let night_sun = sun_shadow_strength(-0.3);
+        assert_eq!(night_sun, 0.0);
+        let full = blob_weight(night_sun, 10.0, 70.0);
+        assert_eq!(
+            full, 1.0,
+            "with the feature off the whole oval is still there"
+        );
+        let under_moon = blob_weight(night_sun + 0.35, 10.0, 70.0);
+        assert!(
+            (under_moon - 0.65).abs() < 1e-6,
+            "a 0.35 moon cast leaves 0.65 of the oval, not {under_moon}"
+        );
+        // …and the two together are the constant the day arm is: whatever the realtime lane lands,
+        // the oval lands the rest.
+        assert!((under_moon + 0.35 - 1.0).abs() < 1e-6);
+        // Past the cascade edge the moon cast resolves nothing, so the full oval returns even
+        // though the moon is up — the same edge behaviour the sun arm has.
+        assert_eq!(blob_weight(night_sun + 0.35, 80.0, 70.0), 1.0);
+        // The moonrise ramp reaches the oval monotonically: no pop as the weight lifts off zero.
+        let mut prev = 1.0;
+        for step in 0..=20 {
+            let w = blob_weight(night_sun + 0.35 * step as f32 / 20.0, 10.0, 70.0);
+            assert!(
+                w <= prev + 1e-6,
+                "the oval brightened as the moon rose, at step {step}"
+            );
+            prev = w;
+        }
+        assert!((prev - 0.65).abs() < 1e-6);
     }
 
     /// The ±5 clamp is a pre-scale cap, not a floor.

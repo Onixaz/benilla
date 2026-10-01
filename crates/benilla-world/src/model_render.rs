@@ -8,7 +8,7 @@ use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Buffer, Face};
 
-use benilla_assets::materials::{WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY_REF};
+use benilla_assets::materials::{TorchBinds, WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY_REF};
 
 mod batch;
 pub mod lazy;
@@ -75,6 +75,9 @@ pub struct MatKey {
     window: bool,
     /// A depth-prime twin ([`zfill_material`], the reference's `M2UseZFill` clone at `0x707f7d`).
     zfill: bool,
+    /// MONKEY (fix-wind): a classified tree/bush leaf batch's exile copy, marker bit 14
+    /// ([`FOLIAGE_WIND_MARKER`]); `wow_model.wgsl` sways only these.
+    foliage_wind: bool,
     /// A WMO skybox batch ([`crate::skybox`]), with its own pipeline and sort rung.
     sky_depth: bool,
     /// The placement owning this material when its animated loop follows the instance's sequence
@@ -146,7 +149,145 @@ pub fn model_material(
     window: bool,
     sky_depth: bool,
     light: &Buffer,
+    // MONKEY (torch shadows Phase 3A): the shared torch depth image + table buffer, cloned into the
+    // material beside `light` (not a key axis — one pair for the whole scene, like the light).
+    torch: &TorchBinds,
+    // The ONE placement this material belongs to, or `None` for the shared batch material every
+    // instance of the model reuses. `Some` only for a batch whose animated UV/tint loop depends on
+    // the sequence its instance is playing (decision 1408): the animated-material registries are
+    // keyed by material, so such a batch cannot share one and be right. See `MatKey::instance`.
     instance: Option<Entity>,
+) -> Handle<WowModelMaterial> {
+    model_material_impl(
+        cache,
+        materials,
+        texture,
+        blend,
+        two_sided,
+        is_wmo,
+        is_interior,
+        is_emissive,
+        is_additive,
+        fade_variant,
+        no_depth_write,
+        no_depth_test,
+        fog_policy,
+        env_map,
+        shade,
+        batch_order,
+        uv_anim,
+        rgb_anim,
+        wmo_class,
+        sidn,
+        window,
+        sky_depth,
+        light,
+        torch,
+        instance,
+        false,
+    )
+}
+
+/// MONKEY (fix-wind): [`model_material`] for a classified tree/bush leaf batch's exile copy: the
+/// same material plus [`FOLIAGE_WIND_MARKER`], so the entity draw sways like the retained batch.
+#[allow(clippy::too_many_arguments)]
+pub fn foliage_model_material(
+    cache: &mut MaterialCache,
+    materials: &mut Assets<WowModelMaterial>,
+    texture: Option<Handle<Image>>,
+    blend: ModelBlend,
+    two_sided: bool,
+    is_wmo: bool,
+    is_interior: bool,
+    is_emissive: bool,
+    is_additive: bool,
+    fade_variant: bool,
+    no_depth_write: bool,
+    no_depth_test: bool,
+    fog_policy: benilla_formats::FogPolicy,
+    env_map: bool,
+    shade: ShadeSel,
+    batch_order: u16,
+    uv_anim: Option<&std::sync::Arc<benilla_formats::UvAnim>>,
+    rgb_anim: Option<&std::sync::Arc<benilla_formats::RgbAnim>>,
+    wmo_class: Option<WmoBatchClass>,
+    sidn: Option<[u8; 3]>,
+    window: bool,
+    sky_depth: bool,
+    light: &Buffer,
+    // MONKEY (torch shadows Phase 3A): the shared torch depth image + table buffer, cloned into the
+    // material beside `light` (not a key axis — one pair for the whole scene, like the light).
+    torch: &TorchBinds,
+    // The ONE placement this material belongs to, or `None` for the shared batch material every
+    // instance of the model reuses. `Some` only for a batch whose animated UV/tint loop depends on
+    // the sequence its instance is playing (decision 1408): the animated-material registries are
+    // keyed by material, so such a batch cannot share one and be right. See `MatKey::instance`.
+    instance: Option<Entity>,
+) -> Handle<WowModelMaterial> {
+    model_material_impl(
+        cache,
+        materials,
+        texture,
+        blend,
+        two_sided,
+        is_wmo,
+        is_interior,
+        is_emissive,
+        is_additive,
+        fade_variant,
+        no_depth_write,
+        no_depth_test,
+        fog_policy,
+        env_map,
+        shade,
+        batch_order,
+        uv_anim,
+        rgb_anim,
+        wmo_class,
+        sidn,
+        window,
+        sky_depth,
+        light,
+        torch,
+        instance,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn model_material_impl(
+    cache: &mut MaterialCache,
+    materials: &mut Assets<WowModelMaterial>,
+    texture: Option<Handle<Image>>,
+    blend: ModelBlend,
+    two_sided: bool,
+    is_wmo: bool,
+    is_interior: bool,
+    is_emissive: bool,
+    is_additive: bool,
+    fade_variant: bool,
+    no_depth_write: bool,
+    no_depth_test: bool,
+    fog_policy: benilla_formats::FogPolicy,
+    env_map: bool,
+    shade: ShadeSel,
+    batch_order: u16,
+    uv_anim: Option<&std::sync::Arc<benilla_formats::UvAnim>>,
+    rgb_anim: Option<&std::sync::Arc<benilla_formats::RgbAnim>>,
+    wmo_class: Option<WmoBatchClass>,
+    sidn: Option<[u8; 3]>,
+    window: bool,
+    sky_depth: bool,
+    light: &Buffer,
+    // MONKEY (torch shadows Phase 3A): the shared torch depth image + table buffer, cloned into the
+    // material beside `light` (not a key axis — one pair for the whole scene, like the light).
+    torch: &TorchBinds,
+    // The ONE placement this material belongs to, or `None` for the shared batch material every
+    // instance of the model reuses. `Some` only for a batch whose animated UV/tint loop depends on
+    // the sequence its instance is playing (decision 1408): the animated-material registries are
+    // keyed by material, so such a batch cannot share one and be right. See `MatKey::instance`.
+    instance: Option<Entity>,
+    foliage_wind: bool,
 ) -> Handle<WowModelMaterial> {
     let key = MatKey {
         light: light.id(),
@@ -170,6 +311,7 @@ pub fn model_material(
         sidn,
         window,
         zfill: false,
+        foliage_wind,
         sky_depth,
         instance,
     };
@@ -256,7 +398,8 @@ pub fn model_material(
                             | (u16::from(blend == ModelBlend::Mod2x) << 8)
                             | (u16::from(fade_variant && source_cutout) * TWIN_CUTOUT_MARKER)
                             | (u16::from(env_map) * ENV_MAP_MARKER)
-                            | (u16::from(sky_depth) * SKY_DEPTH_MARKER),
+                            | (u16::from(sky_depth) * SKY_DEPTH_MARKER)
+                            | (u16::from(foliage_wind) * FOLIAGE_WIND_MARKER),
                     ),
                     0.0,
                 ),
@@ -316,7 +459,13 @@ pub fn model_material(
                 },
                 // Zero until a sampler registers this material and bakes its table slot in once.
                 anim_slots: Vec4::ZERO,
+                // MONKEY (skybox): no second stage.
+                stage1: Vec4::ZERO,
+                stage1_texture: None,
                 light_buf: light.clone(),
+                // MONKEY (torch shadows Phase 3A): the shared torch receiver bindings.
+                torch_depth: torch.depth.clone(),
+                torch_buf: torch.table.clone(),
             },
         },
     );
@@ -338,6 +487,12 @@ pub(crate) const ENV_MAP_MARKER: u16 = 1 << 12;
 /// `clutter_fade.z` marker bit 13: a WMO skybox batch, whose pipeline pins the far depth at the
 /// vertex with no raster bias; a `WowModelKey` axis, so every other draw keeps its real depth.
 pub(crate) const SKY_DEPTH_MARKER: u16 = 1 << 13;
+
+/// MONKEY (fix-wind): `clutter_fade.z` marker bit 14: a classified tree/bush leaf batch's exile
+/// copy, the only entity draw `wow_model.wgsl` applies `tree_offset` to. Vertex-only uniform data,
+/// not a `WowModelKey` axis. (It replaced MeshTag bit 18, which aliases the lane weight and the
+/// interior probe slot, so doorway units and interior props swayed.)
+pub(crate) const FOLIAGE_WIND_MARKER: u16 = 1 << 14;
 
 /// [`BATCH_ORDER_SORT_EPS`] for the WMO skybox lane: at the −6e4 rung the f32 ulp is 0.0039, so
 /// 1e-3 would round away; this step is 4 ulps. Every skybox batch pair ties, being eye-anchored.
@@ -374,6 +529,7 @@ pub fn zfill_material(
     two_sided: bool,
     cutout: bool,
     light: &Buffer,
+    torch: &TorchBinds,
 ) -> Handle<WowModelMaterial> {
     let key = MatKey {
         light: light.id(),
@@ -401,6 +557,7 @@ pub fn zfill_material(
         sidn: None,
         window: false,
         zfill: true,
+        foliage_wind: false,
         // No skybox batch has a twin: the sky writes no depth.
         sky_depth: false,
         instance: None,
@@ -435,7 +592,13 @@ pub fn zfill_material(
                 tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
                 sidn: Vec4::ZERO,
                 anim_slots: Vec4::ZERO,
+                // MONKEY (skybox): no second stage.
+                stage1: Vec4::ZERO,
+                stage1_texture: None,
                 light_buf: light.clone(),
+                // MONKEY (torch shadows Phase 3A): the shared torch receiver bindings.
+                torch_depth: torch.depth.clone(),
+                torch_buf: torch.table.clone(),
             },
         },
     );
@@ -912,13 +1075,35 @@ pub enum ModelKind {
 
 /// A spawned model submesh's subsystem and blend layer, which the panel toggles on.
 #[derive(Component, Clone, Copy)]
+#[require(ShadowOccluder)]
 pub struct ModelPart {
     pub kind: ModelKind,
     pub blend: ModelBlend,
 }
 
-/// Why the streamer left this submesh on the entity path, one static label per batch for the
-/// census (`VIS_CENSUS … why …`); absent on units, GameObjects and everything the app spawns.
+/// The camera-INDEPENDENT half of [`visibility::apply_model_visibility`]'s verdict: does this
+/// submesh exist as world content this frame (toggles, far clip, distance fade, material alpha)?
+///
+/// `Visibility` cannot answer that for a shadow caster: it also folds the exterior window gate,
+/// the portal PVS and the exterior-scene cull — all functions of where the camera LOOKS — and a
+/// wall behind the camera still blocks the sun. Gating the caster proxy on `InheritedVisibility`
+/// made every entity-lane shadow swing with view direction. Defaults to occluding so a part casts
+/// correctly from its spawn frame; the walk corrects a toggled-off part one frame later.
+#[derive(Component, Clone, Copy)]
+pub struct ShadowOccluder(pub bool);
+
+impl Default for ShadowOccluder {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// **Why this submesh is an entity at all** — the world streamer's answer, one static label per
+/// batch, for the census (`VIS_CENSUS … why …`). A city keeps thousands of hidden model
+/// submeshes resident on the entity path while the retained pass draws the world (5.6k ADT
+/// doodad submeshes at the Stormwind auction house, 1945), and every one of them rides every
+/// per-`Mesh3d` sweep; which divert declined it is the first question about pricing them.
+/// Absent on units, GameObjects and everything the app lane spawns.
 #[derive(Component, Clone, Copy)]
 pub struct EntityPathWhy(pub &'static str);
 

@@ -637,6 +637,17 @@ pub(super) fn attach_missile_models(
         ) {
             continue;
         }
+        // MONKEY (spell light): a luminous projectile carries its light with it — the Fireball's
+        // core lights the road it flies over, and the flash at the end is the impact effect's own
+        // (`dest_fx` / the kit on the target), not this one's. `Missile` = constant: a projectile
+        // has no lifecycle to follow and no fade to run, because its ending is the arrival despawn
+        // that takes the light with it.
+        super::spawn_spell_light(
+            &mut commands,
+            &dm.lights,
+            entity,
+            super::spell_fx::SpellLightMode::Missile,
+        );
         missile.parts_spawned = true;
     }
 }

@@ -65,6 +65,31 @@ impl GroundFx {
     }
 }
 
+/// MONKEY (area spell light): what an armed DynamicObject anchor knows about the light its area
+/// visual should throw, stamped at arm time and read once the model finishes building.
+///
+/// It exists because the two halves of the answer arrive at different moments, in different
+/// systems. `radius` (the wire AoE) and `school` (the spell's `Spell.dbc` column) are only in hand
+/// at [`arm_ground_effects`], where the create's fields and the spell catalog are; the model's own
+/// verdict — whether its emitters synthesised a light, and in what hue — is only in hand at
+/// [`attach_ground_fx_models`], however many frames later the M2 finishes building. Carrying the
+/// first pair forward on the anchor is cheaper and far less fragile than re-resolving the spell id
+/// there.
+///
+/// Its PRESENCE is load-bearing too: it marks the instance as a dynobj AREA visual, so the looping
+/// branch of the attach takes the area verdict *including its refusals*. Without that a frost
+/// area's visual A would fall through to the impact-flash light this lane used to spawn for it, and
+/// Blizzard would light after all.
+#[derive(Component)]
+pub(super) struct AreaLightPlan {
+    /// `DYNAMICOBJECT_RADIUS` — the effect's real footprint (the shard emitter spreads over exactly
+    /// it), which sizes the pool and is the impact dedupe's test radius.
+    radius: f32,
+    /// The spell's `Spell.dbc` **School** index — the locale-proof half of the classification
+    /// ([`benilla_formats::area_light_kind`]).
+    school: u32,
+}
+
 /// Visual B, a DynamicObject's shard emitter (`AUBlizzardObject`, `0x5d55c0`, `0x6ece30`). It dies
 /// with the anchor (`0x6ecf20` zeroes the rate); its shards are free entities that run out their
 /// own lifetimes.
@@ -129,6 +154,14 @@ pub(super) fn arm_ground_effects(
             .dynamicobject_position()
             .map(|(_, f)| f)
             .unwrap_or(0.0);
+        // MONKEY (area spell light): stamp the two facts only this system holds, for the attach to
+        // finish the verdict with. Unconditional — a plan whose school ends up dark is exactly how
+        // Blizzard's visual A is told to throw NO light (see [`AreaLightPlan`]).
+        let radius = store.0.dynamicobject_radius().unwrap_or(0.0);
+        commands.entity(anchor).insert(AreaLightPlan {
+            radius,
+            school: spells.catalog.get(spell_id).map_or(0, |d| d.school),
+        });
         // Visual A (`0x5d57c0`): field 12's model when field 11 is set, at the object's position
         // with no terrain projection, turned by `DYNAMICOBJECT_FACING` (`0x613ef0`, `0x7bdd60`);
         // as a child it goes with the anchor.
@@ -155,7 +188,7 @@ pub(super) fn arm_ground_effects(
                 ensure_model(&mut fx, &asset_server, &path);
                 commands.entity(anchor).insert(ShardEmitter {
                     path,
-                    radius: store.0.dynamicobject_radius().unwrap_or(0.0),
+                    radius,
                     rate: proc.params[1] * level_scale,
                     accum: 0.0,
                     rng: 0x9e3779b97f4a7c15 ^ anchor.to_bits(),
@@ -227,12 +260,48 @@ pub(super) fn tick_shard_emitters(
     }
 }
 
+/// MONKEY (area spell light): how far ABOVE OR BELOW a live area pool's own height an impact may
+/// still be deduped against it (yd).
+///
+/// The footprint test itself is HORIZONTAL, because that is what `DYNAMICOBJECT_RADIUS` describes —
+/// a disc of ground. A vertical window is needed anyway so the disc does not become an infinite
+/// column: a Rain of Fire on the bridge above must not silence the impacts under it. Generous
+/// enough to cover the lift the pool hangs at plus a shard landing on a slope, tight enough to be a
+/// storey.
+const AREA_DEDUPE_HEIGHT: f32 = 10.0;
+
+/// Is `at` (Bevy world space) inside a live area pool's footprint? See [`AREA_DEDUPE_HEIGHT`].
+fn inside_a_live_area(
+    at: Vec3,
+    areas: &Query<(&GlobalTransform, &super::spell_fx::AreaSpellLight)>,
+) -> bool {
+    areas.iter().any(|(gt, area)| {
+        let d = at - gt.translation();
+        d.y.abs() <= AREA_DEDUPE_HEIGHT && d.x * d.x + d.z * d.z <= area.radius * area.radius
+    })
+}
+
 /// Attach each pending instance's parts once its M2 builds, start the one-shot clocks, arm the
 /// loops and despawn expired one-shots.
+#[allow(clippy::type_complexity)]
 pub(super) fn attach_ground_fx_models(
     mut commands: Commands,
     time: Res<Time>,
-    mut instances: Query<(Entity, &mut GroundFx, Option<&mut AnimationPlayer>)>,
+    // MONKEY (area spell light): `ChildOf` joins a VISUAL A instance to the DynamicObject anchor
+    // that owns it — where the plan is, and the entity the light must hang on so it dies with the
+    // area object. `Transform` is the instance's world point for a FREE one (a shard, a dest
+    // one-shot), which is the dedupe's input.
+    mut instances: Query<(
+        Entity,
+        &mut GroundFx,
+        Option<&mut AnimationPlayer>,
+        Option<&ChildOf>,
+        &Transform,
+    )>,
+    // MONKEY (area spell light): the arm-time half of the area verdict, read through the anchor.
+    plans: Query<&AreaLightPlan>,
+    // MONKEY (area spell light): every live area pool, for the impact dedupe.
+    areas: Query<(&GlobalTransform, &super::spell_fx::AreaSpellLight)>,
     fx: Option<ResMut<SpellFx>>,
     asset_server: Res<AssetServer>,
     mut wow_materials: ResMut<Assets<benilla_assets::materials::WowModelMaterial>>,
@@ -244,7 +313,7 @@ pub(super) fn attach_ground_fx_models(
 ) {
     let Some(mut fx) = fx else { return };
     let now = time.elapsed_secs();
-    for (entity, mut inst, player) in &mut instances {
+    for (entity, mut inst, player, parent, at) in &mut instances {
         if !inst.spawned {
             ensure_model(&mut fx, &asset_server, &inst.path);
             let Some(dm) = fx.models.get(&inst.path) else {
@@ -273,6 +342,53 @@ pub(super) fn attach_ground_fx_models(
                 continue; // model still building
             }
             inst.spawned = true;
+            // MONKEY (area spell light): a VISUAL A on an armed anchor is a persistent ground
+            // effect, and takes the AREA lane instead of the flash below — one light for the
+            // DynamicObject's whole life, hung on the ANCHOR (not on this instance) so the
+            // server's destroy is what ends it. `area_light_kind` finishes the verdict the plan
+            // started, and its refusals are honoured: when it says dark, this instance gets no
+            // light at all rather than falling through to the flash.
+            let plan = parent.map(|c| c.parent()).and_then(|anchor| {
+                plans
+                    .get(anchor)
+                    .ok()
+                    .map(|plan| (anchor, plan))
+                    .filter(|_| inst.looping)
+            });
+            if let Some((anchor, plan)) = plan {
+                let kind = benilla_formats::area_light_kind(
+                    &inst.path,
+                    plan.school,
+                    dm.lights.iter().find_map(|l| l.spell.map(|fx| fx.kind)),
+                );
+                super::spawn_area_spell_light(&mut commands, &dm.lights, kind, anchor, plan.radius);
+                continue; // no one-shot clock and no flash — the area object owns both ends
+            }
+            // MONKEY (spell light): the IMPACT flash. A dest-anchored effect is the one lane whose
+            // light must not hold — a Fire Nova lights the ground it lands on and is gone. The
+            // burst span is the model's own first-sequence duration where it authors one (so the
+            // light fades with the effect rather than on a guess), the shared default otherwise;
+            // a LOOPING plant (a persistent ground aura) takes the default too, because "as long
+            // as the aura lasts" is exactly what a burst must not be.
+            //
+            // MONKEY (area spell light): …unless it lands INSIDE a live area pool, in which case it
+            // throws nothing. Rain of Fire emits a shard 5× a second from this very model, each of
+            // which used to spawn its own 0.6 s flash: 5 lights/s stacking on one patch of ground,
+            // strobing, and — before the budget's area exemption — evicting the standing pool they
+            // were landing in. The area light already IS the light of that ground; a second one per
+            // impact adds nothing but the flicker.
+            if !inside_a_live_area(at.translation, &areas) {
+                let span = dm
+                    .first_seq_span
+                    .filter(|_| !inst.looping)
+                    .unwrap_or(super::spell_fx::SPELL_BURST_SPAN);
+                super::spawn_spell_light(
+                    &mut commands,
+                    &dm.lights,
+                    entity,
+                    super::spell_fx::SpellLightMode::Burst { span },
+                );
+            }
             if !inst.looping {
                 // One pass of the first sequence, as `spell_fx`'s span clock times a kit.
                 let span = dm.first_seq_span.unwrap_or(super::spell_fx::FALLBACK_SPAN);

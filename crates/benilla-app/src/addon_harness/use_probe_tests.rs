@@ -6,11 +6,6 @@
 
 use std::path::{Path, PathBuf};
 
-#[cfg(unix)]
-use std::os::unix::fs::symlink as symlink_dir;
-#[cfg(windows)]
-use std::os::windows::fs::symlink_dir;
-
 use super::{survey, Used};
 
 /// One throwaway AddOns root, cleaned up on drop even if a test panics; its own temp prefix keeps
@@ -213,7 +208,8 @@ fn bagnon_is_reachable_and_omnicc_is_not_broken() {
     let corpus = benilla_formats::addon_corpus_or_skip!();
     let fx = Fixtures::new("oracle");
     for name in ["!OmniCC", "Bagnon", "Bagnon_Core", "Bagnon_Forever"] {
-        symlink_dir(corpus.join(name), fx.root().join(name)).unwrap();
+        // MONKEY (volumetric fog): share the portable fixture used by the render oracle.
+        super::render_tests::link_fixture(&corpus.join(name), &fx.root().join(name)).unwrap();
     }
     let reports = survey(fx.root());
     let row = |name: &str| {

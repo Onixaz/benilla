@@ -7,13 +7,19 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{f32_at, parse, str_at, u32_at};
+use crate::dbc::{f32_at, parse, u32_at};
 use crate::Chain;
 
 mod atmosphere;
+// MONKEY (fog): `LightFogBand.dbc`, the modern fog fields.
+mod fog_band;
+// MONKEY (skybox): the extended LightSkybox layout and the zone skybox walk.
+mod skybox;
 mod tables;
 
 pub use atmosphere::Atmosphere;
+pub use fog_band::{FogBand, FogBandCatalog, FOG_BANDS_PER_PARAM};
+// MONKEY (leftovers): + the 0x8 / 0x10 flags.
 use atmosphere::{
     FB_CLOUD_DENSITY, FB_FOG_END, FB_FOG_START_MULT, IB_AMBIENT, IB_CLOUD_GBASE, IB_CLOUD_SLOPE,
     IB_CLOUD_SUN, IB_DIFFUSE, IB_FOG_COLOR, IB_OCEAN_DEEP, IB_OCEAN_SHALLOW, IB_RIVER_DEEP,
@@ -21,6 +27,10 @@ use atmosphere::{
     LP_OCEAN_SHALLOW_ALPHA, LP_SKYBOX, LP_WATER_DEEP_ALPHA, LP_WATER_SHALLOW_ALPHA,
 };
 pub use atmosphere::{ZERO_KEY_COLOR, ZERO_KEY_SCALAR};
+pub use skybox::{
+    SkyboxDef, ZoneSkybox, SKYBOX_FOG_BLEND, SKYBOX_FORCE_SUN_SHAFTS, SKYBOX_FULL_DAY,
+    SKYBOX_KEEP_CELESTIAL, SKYBOX_NO_SUN_FOG,
+};
 use tables::{band_schema, load_bands, load_float_bands, sample_color, sample_float, Band, DAY};
 
 const LIGHT: &str = "DBFilesClient\\Light.dbc";
@@ -171,9 +181,13 @@ pub struct LightCatalog {
     /// `LightParams` id → `lightSkyboxID` ([`LP_SKYBOX`]), for its non-zero rows only.
     light_params_skybox: HashMap<u32, u32>,
     /// `LightSkybox.dbc` id → model chain path, spelled as a WMO MOSB skybox is so one model never
-    /// builds twice. Only id 3 (`DeathClouds.mdx`) is reachable from `LightParams`; the other five
-    /// rows are MOSB skyboxes.
-    skyboxes: HashMap<u32, String>,
+    /// builds twice. Stock 1.12 reaches only id 3 (`DeathClouds.mdx`) from `LightParams`; the
+    /// other rows are MOSB skyboxes. MONKEY (skybox): flags and the celestial model ride along
+    /// ([`SkyboxDef`]), read from either table layout.
+    skyboxes: HashMap<u32, SkyboxDef>,
+    /// MONKEY (reviewfix): normalised model path в†’ lowest matching `LightSkybox` id. Some patched
+    /// tables alias a model with different flags; path lookup must not depend on `HashMap` order.
+    skybox_by_path: HashMap<String, u32>,
 }
 
 fn light_schema() -> Schema {
@@ -319,22 +333,9 @@ impl LightCatalog {
             }
             (glow, highlight, water_alpha, skybox)
         };
-        let skyboxes = {
-            let bytes = chain
-                .read_file(LIGHT_SKYBOX)
-                .with_context(|| format!("reading {LIGHT_SKYBOX}"))?;
-            let mut schema = Schema::new("LightSkybox");
-            schema.add_field(SchemaField::new("ID", FieldType::UInt32));
-            schema.add_field(SchemaField::new("Name", FieldType::String));
-            let rs = parse(&bytes, schema, "LightSkybox")?;
-            let mut m = HashMap::with_capacity(rs.records().len());
-            for r in rs.records() {
-                if let (Some(id), Some(path)) = (u32_at(r, 0), str_at(&rs, r, 1)) {
-                    m.insert(id, crate::models::model_path(&path));
-                }
-            }
-            m
-        };
+        // MONKEY (skybox): both layouts, keyed by the header's field count.
+        let skyboxes = skybox::load_skyboxes(chain, LIGHT_SKYBOX)?;
+        let skybox_by_path = skybox::index_paths(&skyboxes);
         Ok(LightCatalog {
             lights,
             int_bands,
@@ -344,6 +345,7 @@ impl LightCatalog {
             light_params_water_alpha,
             light_params_skybox,
             skyboxes,
+            skybox_by_path,
         })
     }
 
@@ -438,7 +440,7 @@ impl LightCatalog {
     pub fn ghost_skybox(&self, map: u32, pos: [f32; 3]) -> Option<&str> {
         let light = self.pick_light(map, pos)?;
         let id = self.light_params_skybox.get(&light.params[SLOT_DEATH])?;
-        self.skyboxes.get(id).map(String::as_str)
+        self.skyboxes.get(id).map(|d| d.path.as_str())
     }
 
     /// The reference's area-light blend: from the map's global light, lerp toward each local
@@ -507,6 +509,66 @@ impl LightCatalog {
             }
         }
         acc
+    }
+
+    /// MONKEY (fog): the `LightParams` ids [`Self::sample_blended`] folds, in its order, each with its
+    /// lerp weight (the base first at 1.0). A side table keyed by `LightParams` (`LightFogBand.dbc`)
+    /// blends through this with the same law. Magma and slime give their fixed row alone.
+    pub fn blend_chain(
+        &self,
+        map: u32,
+        pos: [f32; 3],
+        stormy: bool,
+        submersion: Submersion,
+        ghost: bool,
+    ) -> Vec<(u32, f32)> {
+        if let Some(p) = submersion.fixed_param() {
+            if self.has_param(p) {
+                return vec![(p, 1.0)];
+            }
+        }
+        let slot = weather_slot(ghost, stormy, submersion.is_water());
+        let param_of = |l: &Light| match l.params[slot] {
+            0 => l.params[SLOT_CLEAR],
+            p => p,
+        };
+        let mut chain = Vec::new();
+        let map_has_no_light = !self.lights.iter().any(|l| l.map == map);
+        if let Some(base) = self
+            .lights
+            .iter()
+            .find(|l| l.map == map && l.global)
+            .or_else(|| {
+                map_has_no_light
+                    .then(|| self.lights.iter().find(|l| l.id == FALLBACK_LIGHT_ID))
+                    .flatten()
+            })
+        {
+            let p = param_of(base);
+            if p >= 1 {
+                chain.push((p, 1.0));
+            }
+        }
+        let mut locals: Vec<(f32, &Light)> = self
+            .lights
+            .iter()
+            .filter(|l| l.map == map && !l.global)
+            .filter_map(|l| {
+                let d = (0..3)
+                    .map(|i| (l.pos[i] - pos[i]).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                (d <= l.falloff_end).then_some((d, l))
+            })
+            .collect();
+        locals.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for (dist, l) in locals {
+            let p = param_of(l);
+            if p >= 1 {
+                chain.push((p, blend_alpha(dist, l.falloff_start, l.falloff_end)));
+            }
+        }
+        chain
     }
 
     /// Debug: the spheres near `pos`, nearest first (the blend applies them farthest first), then

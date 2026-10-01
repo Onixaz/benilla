@@ -17,7 +17,7 @@ use super::tex_anim;
 use super::{le_u16, le_u32, model_path, remap_submesh};
 use super::{
     AlphaAnim, Billboard, BillboardKind, BoneScaleAnim, CharSkinSlot, FogPolicy, ModelBlend,
-    RenderSubmesh,
+    RenderSubmesh, StageTwo,
 };
 
 fn parent_dir(path: &str) -> &str {
@@ -479,6 +479,37 @@ pub fn parse_m2_render_submeshes(
         let rgb_seq = rgb_track
             .and_then(|t| mat_anim::bake_rgb_seqs(t, &model.global_sequences, &seq_slots))
             .filter(|set| set.uniform().is_none());
+        // MONKEY (skybox): stage 1 of a two-texture batch; an env-mapped stage 1 is left out.
+        let stage1 = (batch.texture_count >= 2 && !model.stage_is_env_mapped(batch, 1))
+            .then(|| {
+                let rec = model
+                    .raw_data
+                    .texture_lookup_table
+                    .get(batch.texture_combo_index as usize + 1)
+                    .and_then(|&ti| model.textures.get(ti as usize))?;
+                let set = model
+                    .texture_unit_lookup
+                    .get(batch.texture_coord_combo_index as usize + 1)
+                    .copied()
+                    .unwrap_or(0);
+                // MONKEY (reviewfix): 0xffff is the no-transform sentinel. Advancing stage 1 must
+                // keep it absent rather than wrap it onto stage 0's transform at index zero.
+                let combo = batch.texture_transform_combo_index.checked_add(1);
+                Some((
+                    resolve_texture(rec, dir, skins).0,
+                    (rec.wrap_x, rec.wrap_y),
+                    set == 1,
+                    batch.shader_id & 0xf == 4,
+                    combo.and_then(|combo| tex_anim::bake_uv_anim(model, combo, seq0_slot)),
+                    combo
+                        .and_then(|combo| tex_anim::bake_uv_rot_seqs(model, combo, &seq_slots))
+                        .and_then(|s| s.seq(None).cloned()),
+                    combo
+                        .and_then(|combo| tex_anim::bake_uv_scale_seqs(model, combo, &seq_slots))
+                        .and_then(|s| s.seq(None).cloned()),
+                ))
+            })
+            .flatten();
         // The reference turns each billboard bone to the camera about its own pivot, and a batch
         // can hold cards on several bones (a candelabra's glows): one submesh per billboard bone.
         let make_billboard = |bone_idx: usize| -> Option<Billboard> {
@@ -591,6 +622,26 @@ pub fn parse_m2_render_submeshes(
             sub.uv_scale_seq = uv_scale_seq.clone();
             sub.rgb_anim = rgb_anim.clone();
             sub.rgb_seq = rgb_seq.clone();
+            // MONKEY (skybox): stage 1's UVs follow the submesh's own vertex order.
+            sub.stage1 = stage1.as_ref().map(
+                |(texture, (wrap_x, wrap_y), uv1, mod2x, uv_anim, uv_rot, uv_scale)| StageTwo {
+                    texture: texture.clone(),
+                    wrap_x: *wrap_x,
+                    wrap_y: *wrap_y,
+                    uvs: globals
+                        .iter()
+                        .map(|&g| {
+                            let v = &model.vertices[g as usize];
+                            let c = if *uv1 { &v.tex_coords2 } else { &v.tex_coords };
+                            [c.x, c.y]
+                        })
+                        .collect(),
+                    mod2x: *mod2x,
+                    uv_anim: uv_anim.clone(),
+                    uv_rot: uv_rot.clone(),
+                    uv_scale: uv_scale.clone(),
+                },
+            );
             out.push(sub);
         }
     }

@@ -23,6 +23,65 @@ const CHEST_GUID: u64 = (0xF110u64 << 48) | 0x744;
 /// 45°), so `front` shows the lit side and `rear` the unlit one.
 const SUBJECT_YAW: f32 = 2.36;
 
+/// MONKEY (wind): stand one real player in the grass-parting world capture without loading the
+/// player UI. `UiFixture::Subject` intentionally opts the whole HUD in; parting needs the live
+/// entity path but a pristine world framebuffer. `look` is the scenario's documented feet point.
+pub(super) fn seed_wind_player(
+    mut commands: Commands,
+    ctx: Res<CaptureCtx>,
+    progress: Res<WorldLoadProgress>,
+    mut seeded: Local<bool>,
+) {
+    let Some(scenario) = ctx.scenario else {
+        return;
+    };
+    if *seeded
+        || scenario.name != "wind-player-parting"
+        || !(progress.total > 0 && progress.ready == progress.total)
+    {
+        return;
+    }
+    *seeded = true;
+    use benilla_protocol::messages::ObjectFields;
+    commands.spawn((
+        crate::net::Guid(0x51),
+        crate::net::NetEntity {
+            kind: benilla_protocol::EntityKind::Player,
+            // HumanMale.m2; the normal entity visual path supplies the body.
+            display_id: Some(49),
+            scale: 1.0,
+        },
+        crate::net::ObjectStore(ObjectFields::from_pairs(&[
+            (22, 100),        // UNIT_FIELD_HEALTH
+            (28, 100),        // UNIT_FIELD_MAXHEALTH
+            (34, 12),         // UNIT_FIELD_LEVEL
+            (35, 1),          // UNIT_FIELD_FACTIONTEMPLATE
+            (36, 1 | 1 << 8), // UNIT_FIELD_BYTES_0: human warrior
+        ])),
+        // A player visual waits for its equipment resolution handshake before attaching. This
+        // fixture is intentionally naked, so its final resolved set is known immediately.
+        crate::entities::Equipment {
+            settled: true,
+            ..default()
+        },
+        // Mark this visible remote body as the capture's viewer. The real client publishes the
+        // local body through `Viewer::at`; this server-less instrument has no active Player.
+        benilla_world::world_unit::ViewerUnit,
+        benilla_world::world_unit::WorldUnit {
+            wades: true,
+            scale: 1.0,
+            height: crate::entities::CollisionHeight::default().0,
+            bound: None,
+        },
+        Transform {
+            translation: wow_to_bevy(scenario.look),
+            rotation: Quat::from_rotation_y(SUBJECT_YAW),
+            ..default()
+        },
+        Visibility::default(),
+    ));
+}
+
 /// Seeds the fixture window's state once the scene is resident; the real feeds push it into the VM
 /// during the settle window as live wire data would. Icons resolve through the offline
 /// `ItemDisplayCatalog`, and names go straight into the caches.
@@ -983,6 +1042,18 @@ pub(super) fn seed_ui_fixture(
                 warn!("capture: ui-options-graphics seed failed: {e}");
             }
         }
+        // MONKEY (volumetric fog): exercise the rendered Advanced Graphics dropdown and layout.
+        UiFixture::OptionsAdvancedGraphics => {
+            let Some(script) = script else {
+                return;
+            };
+            script.register_cvars(crate::cvars::registered_pairs());
+            if let Err(e) = script.run(
+                "ShowUIPanel(BenillaOptionsFrame); BenillaOptionsFrameCategoryListRowAdvancedGraphics:Click()",
+            ) {
+                warn!("capture: ui-options-advanced seed failed: {e}");
+            }
+        }
         UiFixture::OptionsChat => {
             let Some(script) = script else {
                 return;
@@ -1614,5 +1685,81 @@ fn set_enemy_plates(script: Option<&benilla_ui::script::UiScript>, on: bool) {
     };
     if let Some(Err(e)) = script.map(|s| s.run(lua)) {
         warn!("nameplates: {e}");
+    }
+}
+
+/// MONKEY (perf): `WOW_PERF_CROWD=<n>` stands `n` naked human players (display 49) in a grid
+/// around the scenario's look point, on the ground — a start zone's crowd for the FPS probe, so the
+/// per-unit costs (animation, the shadow lanes' CPU skinning) are in the measurement. Off unset.
+pub(super) fn seed_perf_crowd(
+    mut commands: Commands,
+    ctx: Res<CaptureCtx>,
+    progress: Res<WorldLoadProgress>,
+    spatial: avian3d::prelude::SpatialQuery,
+    mut seeded: Local<bool>,
+) {
+    let Some(n) = std::env::var("WOW_PERF_CROWD")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+    else {
+        return;
+    };
+    let Some(scenario) = ctx.scenario else {
+        return;
+    };
+    if *seeded || !(progress.total > 0 && progress.ready == progress.total) {
+        return;
+    }
+    *seeded = true;
+    use benilla_protocol::messages::ObjectFields;
+    let per_row = 6u32;
+    for i in 0..n {
+        let (row, col) = ((i / per_row) as f32, (i % per_row) as f32);
+        let wow = [
+            scenario.look[0] + (row - 1.0) * 2.5,
+            scenario.look[1] + (col - per_row as f32 * 0.5) * 2.5,
+            scenario.look[2] + 40.0,
+        ];
+        let mut pos = wow_to_bevy(wow);
+        if let Some(hit) = spatial.cast_ray(
+            pos,
+            Dir3::NEG_Y,
+            200.0,
+            true,
+            &benilla_world::collision::WorldCollision::body_filter(),
+        ) {
+            pos.y -= hit.distance;
+        }
+        commands.spawn((
+            crate::net::Guid(0x5100 + u64::from(i)),
+            crate::net::NetEntity {
+                kind: benilla_protocol::EntityKind::Player,
+                display_id: Some(49),
+                scale: 1.0,
+            },
+            crate::net::ObjectStore(ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+                (34, 12),
+                (35, 1),
+                (36, 1 | 1 << 8),
+            ])),
+            crate::entities::Equipment {
+                settled: true,
+                ..default()
+            },
+            benilla_world::world_unit::WorldUnit {
+                wades: true,
+                scale: 1.0,
+                height: crate::entities::CollisionHeight::default().0,
+                bound: None,
+            },
+            Transform {
+                translation: pos,
+                rotation: Quat::from_rotation_y(i as f32 * 0.7),
+                ..default()
+            },
+            Visibility::default(),
+        ));
     }
 }

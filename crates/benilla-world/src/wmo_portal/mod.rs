@@ -125,8 +125,25 @@ pub struct WmoGroupVis {
 }
 
 impl WmoGroupVis {
-    /// Drawn iff any referencing group is in this frame's PVS; an index past the visible set reads
-    /// visible, so a lookup miss never blanks a building.
+    /// MONKEY (fire GO lights): a claim on exactly ONE room, for a rider whose membership comes
+    /// from the interior CLASSIFIER's down-ray ([`crate::interior::InteriorAnchor::room`]) rather
+    /// than from a building's own MODR/MOLR tables — an entity's carried light, whose owner walked
+    /// in through the door and is named by no chunk.
+    ///
+    /// One group, not the referrer set the table-driven path builds, and that is the honest shape:
+    /// the ray answers "which group is this standing in", singular. The `Arc` is a one-element
+    /// allocation per claim, which is nothing beside the per-frame ray it replaces — and it is
+    /// re-made only when the anchor's room actually changes (the claim system is change-gated).
+    pub fn single(instance: Entity, group: u16) -> Self {
+        Self {
+            instance,
+            groups: std::sync::Arc::from([group]),
+        }
+    }
+
+    /// The portal verdict: drawn iff **any** referencing group is in this frame's PVS. An index
+    /// past the instance's visible set (a stale or short set) reads as visible — the same fail-open
+    /// the rest of the cull takes, so a lookup miss can never blank a building.
     pub fn drawn_by(&self, inst: &WmoPortalInstance) -> bool {
         self.groups
             .iter()

@@ -80,6 +80,8 @@ impl PluginGroup for WorldPlugins {
             .add(crate::world_map::WorldMapPlugin)
             .add(crate::lighting::LightingPlugin)
             // Sky dome: the Light.dbc gradient backdrop (camera-centred), driven by the lighting.
+            // MONKEY (sky): before the sky, whose dome imports its WGSL library.
+            .add(crate::sky_fx::SkyFxPlugin)
             .add(crate::sky::SkyPlugin)
             // The WMO skybox, after `SkyPlugin`, whose dome it stands down.
             .add(crate::skybox::SkyboxPlugin)
@@ -87,6 +89,8 @@ impl PluginGroup for WorldPlugins {
             .add(crate::clouds::CloudsPlugin)
             // Weather (`SMSG_WEATHER`): the storm light blend and precipitation.
             .add(crate::weather::WeatherPlugin)
+            // MONKEY (wind): one weather-fed field shared by foliage and future water/cloud lanes.
+            .add(crate::wind::WindPlugin)
             // The sun disc and glow halo (`CSky::Render`).
             .add(crate::sun::SunPlugin)
             // The interior classifier: M2 entities in a WMO room lit off its baked floor colour.

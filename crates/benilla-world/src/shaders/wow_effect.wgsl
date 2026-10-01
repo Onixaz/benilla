@@ -12,6 +12,12 @@
 // - BLEND_MOD2X:    (rgb, 1) under (Dst, Src) = `2·src·dst`, rain's state; reads no alpha.
 
 #import bevy_render::view::View
+// MONKEY (p0 MonkeyFrame): the programme block's struct, mirrored after the point table.
+#import benilla::monkey_frame
+// MONKEY (p0 fog hook): the one distance-fog law every receiver calls.
+#import benilla::fog_hook
+// MONKEY (post): shared tier-gated HDR emission; Off is an exact identity.
+#import benilla::emissive_hook
 
 // Prefix of `lighting::global_light`'s buffer; keep in sync with wow_model.wgsl's copy.
 struct WowLight {
@@ -20,7 +26,10 @@ struct WowLight {
     light_sun: vec4<f32>,
     light_spec: vec4<f32>,
     fog_color: vec4<f32>,  // rgb row-7 fog (gamma); w = enable (>0.5)
-    fog_params: vec4<f32>, // x=start y=end z=linear-lighting A/B flag w=farclip wall
+    // MONKEY (moon shadows): `.z` is the SIGNED directional-shadow weight (+sun / -moon, see
+    // `global_light::pack_shadow_lane`) - unread here, but the old "linear-lighting A/B flag"
+    // note was stale twice over and a lane this shader mirrors should not misname it.
+    fog_params: vec4<f32>, // x=start y=end z=signed shadow weight w=farclip wall
     sh_c10_r: vec4<f32>,
     sh_c10_g: vec4<f32>,
     sh_c10_b: vec4<f32>,
@@ -30,6 +39,11 @@ struct WowLight {
     sh_c16: vec4<f32>,
     _water: array<vec4<f32>, 4>,
     grade: vec4<f32>,
+    // MONKEY (p0 MonkeyFrame): rows 18-20 and the point table, unread here, so the block lines up.
+    _rows_18_20: array<vec4<f32>, 3>,
+    _points: array<vec4<f32>, 512>,
+    // MONKEY (p0 MonkeyFrame): the programme block after the point table (monkey_frame.wgsl).
+    monkey: monkey_frame::MonkeyFrame,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -63,6 +77,8 @@ struct VertexOutput {
     @location(1) color: vec4<f32>,
     // Planar eye-Z for fog and the farclip wall, positive in front of the camera.
     @location(2) view_z: f32,
+    // MONKEY (p0 fog hook): world position (Bevy space) for the fog hook's modern arm.
+    @location(3) world_pos: vec3<f32>,
 };
 
 @vertex
@@ -75,6 +91,7 @@ fn vertex(v: Vertex) -> VertexOutput {
     out.clip_position = view.clip_from_world * vec4<f32>(v.position, 1.0);
     // Eye-Z via the full affine transform; its rounding is yard-scale and harmless.
     out.view_z = -(view.view_from_world * vec4<f32>(v.position, 1.0)).z;
+    out.world_pos = v.position; // MONKEY (p0 fog hook)
 #else
     // Cam-relative verts: view_from_world is [R | −R·cam] and the rebase already subtracted cam,
     // so only the rotation applies.
@@ -85,6 +102,7 @@ fn vertex(v: Vertex) -> VertexOutput {
     ) * v.position;
     out.clip_position = view.clip_from_view * vec4<f32>(view_pos, 1.0);
     out.view_z = -view_pos.z;
+    out.world_pos = v.position + view.world_position; // MONKEY (p0 fog hook): undo the rebase
 #endif
     out.uv = v.uv;
     out.color = v.color;
@@ -140,24 +158,26 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Scene fog: the world's linear fog (same start and end, planar eye-Z) in gamma space before
     // the blend; only its colour follows the per-blend policy in `wow_params.fog.x`.
     if (wow_light.fog_color.w > 0.5 && wow_params.fog.x > 0.5) {
-        let denom = max(wow_light.fog_params.y - wow_light.fog_params.x, 0.001);
-        let factor = clamp((wow_light.fog_params.y - in.view_z) / denom, 0.0, 1.0);
         var fog_rgb = wow_light.fog_color.xyz;
         if (wow_params.fog.x > 1.5 && wow_params.fog.x < 2.5) { fog_rgb = vec3<f32>(0.0); }
         else if (wow_params.fog.x > 2.5 && wow_params.fog.x < 3.5) { fog_rgb = vec3<f32>(1.0); }
         else if (wow_params.fog.x > 3.5) { fog_rgb = RAIN_FOG_GREY; }
-        rgb = mix(fog_rgb, rgb, factor);
+        // MONKEY (p0 fog hook): the shared fog law (fog_hook.wgsl); classic is bit-identical.
+        rgb = fog_hook::apply_fog(rgb, fog_rgb, wow_light.fog_params.xy, in.view_z, in.world_pos,
+            view.world_position, wow_params.fog.x < 1.5, wow_light.monkey);
     }
     // Rain's forced fog: grey over the draw's own start/end, whatever the scene fog; grey is
     // neutral under Mod2x, so this is the streaks' distance fade.
     if (wow_params.fog.y > 0.5) {
-        let denom = max(wow_params.fog.w - wow_params.fog.z, 0.001);
-        let factor = clamp((wow_params.fog.w - in.view_z) / denom, 0.0, 1.0);
+        // MONKEY (p0 fog hook): the draw's own distance fade, always the classic linear law.
+        let factor = fog_hook::fog_linear(in.view_z, wow_params.fog.zw);
         rgb = mix(RAIN_FOG_GREY, rgb, factor);
     }
 #ifdef BLEND_ADD
     // Premultiplied in gamma, so stacked quads sum like the reference's bytes.
-    return vec4<f32>(rgb * c.a, 0.0);
+    // MONKEY (post): boost before the additive framebuffer blend, never after the stack.
+    return vec4<f32>(emissive_hook::emissive_boost(
+        rgb * c.a, emissive_hook::EMISSIVE_PARTICLE_ADD, wow_light.light_diffuse.w, 1.0), 0.0);
 #else
 #ifdef BLEND_OPAQUE
     return vec4<f32>(rgb, 1.0);

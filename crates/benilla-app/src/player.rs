@@ -215,7 +215,11 @@ impl Plugin for PlayerPlugin {
             Update,
             (world_focus::publish_viewer, world_focus::publish_view_focus)
                 .after(benilla_world::schedule::WorldStage::Input)
-                .before(benilla_world::schedule::WorldStage::Stream),
+                .before(benilla_world::schedule::WorldStage::Stream)
+                // MONKEY (integration): the `Viewer` readers the programme added (grass benders,
+                // fog model, zone skybox) run after this frame's publish.
+                .before(benilla_world::wind::WindTick)
+                .before(benilla_world::lighting::LightingResolveSet),
         )
         .add_systems(
             Update,

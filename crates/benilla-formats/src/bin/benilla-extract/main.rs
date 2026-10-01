@@ -387,10 +387,22 @@ enum Command {
         /// models if omitted.
         prefix: Option<String>,
     },
-    /// Sweep every WMO root and cross-tab its MOSB skybox model against its groups' `0x40000`
-    /// flag, which never appears without a MOSB in all 815 roots; the reference tests it on the
-    /// flood-visited group (`0x6b42e0`). Also which buildings replace the `Light.dbc` dome with an
-    /// authored sky, and in how many groups: only Stratholme's is reachable in 1.12.
+    /// MONKEY (fire GO lights): the twin of `m2lightscan` for the models that author NO light —
+    /// which ones would take a **synthesised** one from their flame particle emitter, and what
+    /// colour/intensity the heuristic derives (`benilla_formats::fire_light`). The offline audit
+    /// of a rule that is applied to ~430 fire props at load, none of which the reference lights.
+    M2firescan {
+        /// Internal-path prefix filter (e.g. `world\generic`), case-insensitive; all models if
+        /// omitted.
+        prefix: Option<String>,
+    },
+    /// Sweep every WMO ROOT and cross-tab the two halves of the skybox mechanism: the root's
+    /// **MOSB** skybox model against its groups' `0x40000` flag. `0x40000` is undocumented, so this
+    /// is what *identifies* it — across all 815 roots the bit never appears without a MOSB. Note
+    /// what that does and does NOT buy: it establishes `flag => MOSB`, never which group the
+    /// renderer tests (the carved law is the flood-VISITED group, decision 0773 correcting 0767).
+    /// Also the population instrument: which 1.12 buildings replace the `Light.dbc` gradient dome
+    /// with an authored sky (Stratholme's burning city is the only one reachable), and how much
     Skyboxscan,
     /// Dump all 18 `LightIntBand` rows of the `Light.dbc` entry covering a position at a time of
     /// day. One params record, raw: near a sphere's falloff edge the live light is mostly the
@@ -477,10 +489,41 @@ enum Command {
         /// Case-insensitive substring of the prop's model path (e.g. `lightray`); all if omitted.
         filter: Option<String>,
     },
-    /// Sweep every WMO root for placed MODD props the interior lane lights literal black: its base
-    /// light is the MODD colour (ambient `cap96`, diffuse `floor112`, `0x694e90` → `0x6a77e0`), and
-    /// the `112/max` floor keeps `#000000` black. An exterior referrer sky-lights a prop instead
-    /// (`0x695aa0`); `RESCUED` counts those an interior group names first.
+    /// MONKEY (interior attenuation): dump one WMO root's **MOLT fixture table** — type,
+    /// `useAtten`, colour × intensity, the authored attenuation start/end (yd), model-space
+    /// position, and the groups whose MOLR names each fixture (its rooms). Closes with what our
+    /// fixed falloff `1/(0.7d + 0.03d²)` is still worth at each fixture's own authored end: the
+    /// number behind "why does a 20-candle room read uniform".
+    Wmolights {
+        /// Internal path to the WMO **root** (forward or back slashes accepted).
+        internal_path: String,
+        /// MONKEY (trans day law): also dump ONE group's per-VERTEX rows - position + the MOCV
+        /// alpha the shader interpolates as `trans_a` - plus every portal's vertex bounds. The
+        /// batch table above gives a batch's alpha RANGE and mean; a per-vertex blend law can only
+        /// be evaluated against the actual vertices, which is what this prints.
+        #[arg(long)]
+        verts: Option<usize>,
+    },
+    /// MONKEY (interior prop lights): sweep every WMO **root** and audit whether its rooms have
+    /// any light at all — MOLT omni fixtures, MODD props that would SYNTHESISE one (the
+    /// `fire_light` flame/lamp routes), how many of those the 2.5 yd MOLT dedupe drops, and how
+    /// many INTERIOR groups no source claims, before and after the prop lane is admitted indoors.
+    Wmolamps {
+        /// Only roots whose internal path starts with this (e.g. `world\wmo\azeroth`).
+        prefix: Option<String>,
+        /// Also name the still-unlit interior groups of every root whose path contains this.
+        #[arg(long)]
+        detail: Option<String>,
+    },
+    /// Sweep every WMO **root** (optionally under a path prefix) and list the placed MODD props
+    /// the INTERIOR lighting lane commits as **literal black**. That lane's entire base light is
+    /// the MODD entry's own baked colour (ambient `cap96`, diffuse `floor112` — `0x694e90` →
+    /// `0x6a77e0`), and the floor leg is a hue-preserving scale by `112/max`, so a colour of
+    /// exactly `#000000` has nothing to raise and both words come out zero: the prop is lit by
+    /// nothing but its owning group's MOLR fixtures, and a group with none in range draws a pure
+    /// black silhouette. The `ALSO-EXT` column is the divergence half — a prop an EXTERIOR group's
+    /// MODR *also* names is one the reference reaches through that group too, while our
+    /// single-instance first-referrer-wins ownership pins it to the interior lane from every angle.
     Darkpropscan {
         /// Internal-path prefix to limit the sweep (e.g. `world\wmo\azeroth`); all if omitted.
         prefix: Option<String>,
@@ -740,6 +783,7 @@ fn main() -> Result<()> {
             scan::partscan(&mut chain, mask, prefix.as_deref())?;
         }
         Command::M2lightscan { prefix } => scan::m2lightscan(&mut chain, prefix.as_deref())?,
+        Command::M2firescan { prefix } => scan::m2firescan(&mut chain, prefix.as_deref())?,
         Command::Skyboxscan => scan::skyboxscan(&mut chain)?,
         Command::Lightbands {
             map,
@@ -780,6 +824,13 @@ fn main() -> Result<()> {
             internal_path,
             filter,
         } => scan::wmodoodads(&mut chain, &internal_path, filter.as_deref())?,
+        Command::Wmolights {
+            internal_path,
+            verts,
+        } => scan::wmolights(&mut chain, &internal_path, verts)?,
+        Command::Wmolamps { prefix, detail } => {
+            scan::wmolamps(&mut chain, prefix.as_deref(), detail.as_deref())?
+        }
         Command::Darkpropscan { prefix } => scan::darkpropscan(&mut chain, prefix.as_deref())?,
         Command::Placescan {
             map,

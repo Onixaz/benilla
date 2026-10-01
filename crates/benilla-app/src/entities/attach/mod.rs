@@ -742,9 +742,19 @@ pub(super) fn attach_entity_visuals(
                         .map(|a| (l.def.bone, a))
                 })
                 .collect();
-            super::spawn_carried_lights(&mut commands, model_lights, entity, |bone| {
-                light_anchors.get(&bone).copied()
-            });
+            // MONKEY (outdoor torch shadows): a CREATURE's own glow is body-carried and may not
+            // cast an outdoor shadow (`carried_light::HeldLight` holds the three reasons); a
+            // placed GameObject — a brazier, a campfire, a lit quest object — is a fixture that
+            // stands still, so it stays eligible. `net.kind` is the only place the two are told
+            // apart: downstream both are just a `PointLight` under a `ChildOf`.
+            let body_carried = !matches!(net.kind, EntityKind::GameObject);
+            super::spawn_carried_lights(
+                &mut commands,
+                model_lights,
+                entity,
+                body_carried,
+                |bone| light_anchors.get(&bone).copied(),
+            );
             // Ribbon trails, on the same host-bone ride; each despawns with its owner.
             {
                 for rb in dm.map(|d| d.ribbons.as_slice()).unwrap_or_default() {

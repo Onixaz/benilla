@@ -80,12 +80,14 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         // The WMO skybox or the Light.dbc gradient, from the same down-ray as the interior claim.
         // The weight is the 4-second crossfade: `w 0.00` beside a name is a published skybox not
         // yet engaged, which is correct standing outside the gate.
-        match world.skybox.0.as_deref() {
-            Some(path) => {
+        // MONKEY (skybox): the heaviest layer of the weighted list, at its own weight.
+        match world.skybox.primary() {
+            Some(layer) => {
+                let path = layer.path.as_str();
                 let leaf = path.rsplit('\\').next().unwrap_or(path);
                 line.push_str(&format!(
-                    "  ·  skybox {leaf} w {:.2}",
-                    world.skybox_weight.0
+                    "  ·  skybox {leaf} w {:.2} (stand-down {:.2})",
+                    layer.weight, world.skybox_weight.0
                 ));
             }
             None => line.push_str("  ·  sky gradient"),

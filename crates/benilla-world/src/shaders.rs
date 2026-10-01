@@ -11,12 +11,16 @@ use bevy::prelude::*;
 pub(crate) fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "shaders/sky_vertex.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/sky.wgsl");
+    // MONKEY (sky): the Enhanced/High library `sky.wgsl` and `cloud.wgsl` import.
+    bevy::asset::embedded_asset!(app, "shaders/sky_fx.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/star.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/cloud.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/celestial.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/ffx_glow.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/wow_effect.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/static_gx.wgsl");
+    // MONKEY (torch shadows Phase 1): the vertex-only depth-map shader for the interior-fixture pass.
+    bevy::asset::embedded_asset!(app, "shaders/torch_depth.wgsl");
 }
 
 #[cfg(test)]
@@ -52,7 +56,12 @@ mod tests {
                  `shaders::plugin`, or was registered from a file that is not directly under src/"
             );
         }
-        // One per `embedded_asset!` line in `plugin`.
-        assert_eq!(found, 8, "the engine's shader set changed size");
+        // 6 since decision 1264 retired `skybox.wgsl` (a WMO skybox draws on the shared
+        // model lane, whose forced-far-depth branch lives in `benilla_assets`'
+        // `wow_model.wgsl`); 7 since 1429 added `static_gx.wgsl` (the B1 retained pass);
+        // 8 since 2016 added `sky_vertex.wgsl` (the sky's shared far-depth vertex stage);
+        // 9 since the torch-shadow Phase 1 added `torch_depth.wgsl` (the interior depth map).
+        // MONKEY (sky): 10 with `sky_fx.wgsl`, the sky's Enhanced/High library.
+        assert_eq!(found, 10, "the engine's shader set changed size");
     }
 }

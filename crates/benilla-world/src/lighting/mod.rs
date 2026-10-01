@@ -6,17 +6,81 @@ use bevy::prelude::*;
 use benilla_assets::AssetSet;
 use benilla_formats::{LightCatalog, LiquidKind};
 
-mod blob; // off-world light blobs (portrait booths, body panes, glue scene)
-mod daynight; // the sun, moon and day/night curves
-mod global_light; // the shared global-light storage buffer
-mod prop_probes; // the interior-prop SH probe table
-mod resolve; // the per-frame time-of-day resolve and the interior-fog crossfade
-mod sh; // the model SH probe fold
+mod blob; // the off-world light-blob builder (booth studio, body pane, glue scene)
+mod daylight; // MONKEY (daylight fixtures): the sun as an interior-lane light in a doorway
+mod daynight; // the two sun directions + day/night interp + the dawn/dusk warp curve
+mod flicker; // MONKEY (flame flicker): the per-light fire wobble folded in at pack time
+mod global_light; // the one shared global-light storage buffer (replaces the per-material push)
+mod monkey_frame; // MONKEY (p0 MonkeyFrame): the programme's per-frame block after the point table
+pub use monkey_frame::{FogModel, MonkeyFrame, MAX_BENDERS, MONKEY_FRAME_ROWS};
+pub mod fog_model; // MONKEY (fog): the Modern fog model's CPU half (MonkeyFrame fog rows)
+pub use fog_model::FogModelSetting;
+mod lava_light; // MONKEY (lava light): magma surface fixtures and their independent gain
+mod moonlight; // GFX (moonlight): the moon as an additive night light (MonkeyFrame row 16)
+pub use lava_light::{LavaLight, LavaLightGain};
+pub use moonlight::{moon_light_intensity, MoonLight, MOON_LIGHT_BASE};
+mod prop_probes; // the per-instance interior-prop SH probe table (slot ↔ MeshTag payload)
+mod resolve; // the per-frame time-of-day sample into WowLighting + the WMO interior-fog crossfade
+mod sh; // the model SH light-probe coefficient math
 pub use blob::LightBlob;
-pub use global_light::{new_shared_light_buffer, LightRooms, SharedLightBuffer, WorldPointLight};
+// MONKEY (daylight fixtures): the marker (torch_shadow excludes it), the selection rule and the
+// spawn-side helpers the placement lane calls.
+// MONKEY (portal bleed): `placement_openings` is the ONE selection entry point the placement lane
+// calls now -- daylight seeds and interior<->interior doorway seeds share the per-placement budget,
+// so neither can be ranked without the other. `BleedFixture`/`BleedSeed` are the doorway lane's own
+// two types; the fixture itself still wears `DaylightFixture`.
+pub use daylight::set_window_split; // MONKEY (fix-daylight)
+pub use daylight::{
+    bleed_seeds,
+    daylight_claims,
+    daylight_intensity,
+    daylight_lane,
+    daylight_point_light,
+    daylight_reach,
+    daylight_rooms,
+    daylight_seeds,
+    daylight_target,
+    // MONKEY (daylight: district sky rooms)
+    district_sky_rooms,
+    placement_openings,
+    BleedFixture,
+    BleedSeed,
+    DaylightFixture,
+    DaylightHow,
+    DaylightSeed,
+    BLEED_K,
+    MAX_DAYLIGHT_PER_PLACEMENT,
+};
+// MONKEY (flame flicker): the component + the one route rule, so every spawn lane files a flame
+// the same way and the packer has a single function to evaluate.
+pub use flicker::{flame_kind_for, flicker_seed, FlameFlicker, FlameKind, FlickerMod};
+pub use global_light::{
+    interior_reach, m2_light_reach, new_shared_light_buffer, ClaimFade, DynamicInteriors,
+    FireLightGain, LightLane, LightLitRooms, LightReach, LightRooms, ResolvedPointLight,
+    ResolvedPointLights, RoomClaimTable, ShadowDistance, ShadowFilterGaussian, ShadowProxyLight,
+    SharedLightBuffer, SyntheticFireLight, WorldShadowActive,
+};
+// MONKEY (moon shadows): the night directional-shadow strength dial (`moonShadowStrength`), the
+// one resource the settings registry writes for this feature (`0` = the pre-feature night render),
+// plus the two halves of the hand-over law the SHADOW RIG has to agree with the light packer
+// about — which body the one directional light is aimed at, and how much it may cast.
+pub use global_light::{
+    moon_shadow_weight, sun_shadow_strength, MoonShadowStrength, ShadowBody, ShadowHandover,
+};
+// MONKEY (merge 2026-09-17): upstream's world-light component, adopted as THE world light.
+pub use global_light::WorldPointLight;
+// MONKEY (spellLightGain): the spell lane's marker + its live gain — the two-word world-side
+// shadow of benilla-app's own `SpellLight` lifecycle, and the dial the packer folds over it.
+pub use global_light::{SpellFxLight, SpellLightGain};
+// MONKEY (post): live 0/1/2 emissive tier packed without growing the shared light blob.
+pub use global_light::EmissiveTier;
+pub use global_light::{
+    room_claim_bytes, CLAIM_EXT_OK, LIT_ROOM_EXT_DENY, ROOM_CLAIM_MAX, ROOM_CLAIM_STRIDE,
+};
 pub use prop_probes::{PropProbeSlot, PropProbes, MAX_PROP_PROBES};
 // The std430 layout stays in the crate: off-world producers state values through `LightBlob`,
 // never a row index.
+pub(crate) use global_light::per_frame_blob_bytes; // MONKEY (rainshelter)
 pub(crate) use prop_probes::prop_probe_region_offset;
 pub use resolve::WmoCrossfade;
 use resolve::{apply_sky_backdrop, setup_lighting, update_time_lighting};
@@ -100,12 +164,71 @@ pub struct WowLighting {
 }
 
 impl WowLighting {
-    /// Per-kind water swatch endpoints `(shallow_rgb, deep_rgb, shallow_alpha, deep_alpha)`, the
-    /// IntBand rows raw: the × 0.711 dim belongs to the sky fill `0x68c250`, not to water. The ADT
-    /// swatch is the reference's 64-row byte ramp between them (`0x68a830`, in `liquid.wgsl`);
-    /// WMO liquid's opacity is the 256-entry `shallow + d·(deep − shallow)/256` (`0x6b6b60`). One
-    /// depth `V` indexes colour and alpha: `clamp(byte/42)` for river and lake (`0x68d790`, opaque
-    /// by about 5 yd), `clamp(byte/255)` for ocean (`0x68d690`), both built in `0x68c4c0`.
+    /// The visible **celestial sun** direction (camera→sun, Bevy space) — the body that genuinely
+    /// rises and sets over the day. Exposed for the shadow rig, which aims its basis at this MOVING
+    /// sun (with an elevation clamp) rather than the near-fixed lighting `sun_dir`.
+    pub fn celestial_dir(&self) -> Vec3 {
+        self.celestial_dir
+    }
+
+    /// GFX (volumetric light): the scene fog end (yd) the zone's light resolved to, so a post pass
+    /// can scale its density with how foggy the zone is authored to be.
+    pub fn fog_end(&self) -> f32 {
+        self.fog_end
+    }
+
+    /// GFX (volumetric light): the storm blend `0..1` (see the field), for the shafts' dimming.
+    pub fn storm(&self) -> f32 {
+        self.storm_bcc
+    }
+
+    /// MONKEY (moon shadows): the visible **white moon** direction (camera→moon, Bevy space) — the
+    /// body the one shadow rig re-aims at after dark.
+    ///
+    /// This is the renderer's REAL moon, not a stand-in for the sun: [`daynight::moon_direction`]
+    /// is its own `DayNight` track pair off `WoW.exe`'s sky-bodies builder (elevation table
+    /// `0xce8d24`, φ 35°↔100° — overhead at midnight, parked 10° under the horizon 04:00→22:00).
+    /// Its AZIMUTH, however, is the constant 45° the celestial sun also uses (table `0xce8d0c`), so
+    /// a moon shadow falls along the same compass line a midday sun shadow does, only from a lower
+    /// and slower-moving elevation. That is the reference's own geometry, not an approximation
+    /// here.
+    ///
+    /// Exposed beside [`Self::celestial_dir`] and for the same reason: the shadow rig lives in
+    /// `benilla-app` and must aim at the same body the light packer is weighting.
+    pub fn moon_dir(&self) -> Vec3 {
+        self.moon_dir_white
+    }
+
+    /// Per-kind **water swatch endpoints**: `(shallow_rgb, deep_rgb, shallow_alpha, deep_alpha)`. These
+    /// are the ENDPOINTS; the ramp between them is a 64-row byte-space accumulator that `liquid.wgsl`
+    /// reproduces (`swatch_row`), not the plain lerp this doc used to describe — it stops one row short
+    /// of `deep`, and the ocean's last row is darkened (decision 2074). The rows are the zone's
+    /// dedicated `Light.dbc` water rows — IntBand 16/17 (river/lake) or 14/15 (ocean), **RAW** (no
+    /// ×0.711) — indexed by the per-vertex
+    /// depth `V` (river/lake `V = clamp(byte/42)`, built in `benilla-formats::liquid`). VERIFIED from WoW.exe
+    /// `FUN_0068a830`, golden-vector-matched to the apitrace swatch (≤1/255 over all 64 rows). The shader
+    /// (`liquid.wgsl`) lerps both colour and opacity by the *same* V, so they track together.
+    ///
+    /// Alpha endpoints are the **per-zone `LightParams` water-blend alphas** (`water_*_alpha`, decoded
+    /// from fields 5–8): Elwynn/Loch Modan shallow ≈0.5, STV ≈0.85 (its shallows read pale from the
+    /// colour, not transparency) — VERIFIED vs the apitrace swatch alpha + user-confirmed in-game.
+    /// (The earlier "water reflects the sky × 0.711 via `FUN_0068c250`" derivation fingered the WRONG
+    /// builder; the dedicated rows 14-17 we'd originally used were right.)
+    ///
+    /// The opacity ramp itself is indexed by the raw MCLQ depth byte (0 = shore → 255 = deep) with
+    /// **no scale** — VERIFIED `WoW.exe FUN_006b6b60` builds `ca7f10[d] = shallow + d·(deep−shallow)/256`
+    /// from `gWorldLight+0x114/+0x118`, corroborated by the apitrace swatch (`α = 127 + 2·row` ⇒
+    /// 0.5→1.0 for river/lake, 0.75→1.0 for ocean). The alpha and the colour ride the SAME per-vertex
+    /// `V`, and **each kind rides its own verified LUT** — river/lake the steep `clamp(byte/42)`
+    /// (`c81768`, `FUN_0068d790`), ocean the gentle `clamp(byte/255)` (`c7fcd8`, `FUN_0068d690`),
+    /// both built side by side in `FUN_0068c4c0`. A river channel saturates to opaque deep teal by
+    /// **byte 42 ≈ 5 yd** (ramp ≈8.5 byte/yd, VERIFIED `probe_water_depth`, re-measured at 8.96 over
+    /// every MCLQ block in Azeroth + Kalimdor), leaving only the shore edge see-through; the sea
+    /// authors its byte 5.2× gentler (1.72 byte/yd), so its `/255` saturates at ~148 yd of depth —
+    /// the same ramp in yards, not a 6× slower one (decision 2069).
+    /// (Earlier bugs: `×8 DEPTH_RAMP_SCALE` saturated at ~4 yd; then the gentle `byte/255` was the
+    /// WRONG LUT **for a river** and the river middle never reached teal — which is what got the
+    /// sea's own `/255` mislabelled a placeholder for months.)
     pub(crate) fn water_colors(&self, kind: LiquidKind) -> ([f32; 3], [f32; 3], f32, f32) {
         let (shallow_rgb, deep_rgb, alpha) = if kind == LiquidKind::Ocean {
             (
@@ -228,8 +351,21 @@ impl Plugin for LightingPlugin {
                     // This frame's submersion verdict, which the sky-pass suppression also reads.
                     .after(crate::liquid::SubmersionVerdict),
             );
+        // MONKEY (fog): the fog-model setting, LightFogBand.dbc and the per-frame fog rows.
+        app.init_resource::<fog_model::FogModelSetting>()
+            .init_resource::<fog_model::FogBandTable>()
+            .add_systems(Startup, fog_model::load_fog_bands.after(AssetSet::Open))
+            .add_systems(
+                Update,
+                fog_model::update_fog_model
+                    .after(update_time_lighting)
+                    .in_set(LightingResolveSet),
+            );
         // The shared light buffer, packed after the resolve and uploaded in the render world.
         global_light::register(app);
+        // MONKEY (daylight fixtures): the per-frame re-aim, ordered before the packer's own set.
+        daylight::register(app);
+        lava_light::register(app);
     }
 }
 
@@ -294,10 +430,34 @@ mod ordering_tests {
                 "build_light_data: PostUpdate, .after(update_time_lighting)",
             ),
             (
+                "liquid/scene_depth.rs",
+                "MONKEY (water): update_water_depth feeds the sky rows to the water material in `Last`, after the PostUpdate resolve",
+            ),
+            (
                 "sun/follow.rs",
                 "the celestial follows: PostUpdate, BillboardPlace",
             ),
             ("weather/precip/mod.rs", "push_precip: PostUpdate"),
+            // MONKEY (fog)
+            (
+                "lighting/fog_model.rs",
+                "update_fog_model: in the resolve set, .after(update_time_lighting)",
+            ),
+            // MONKEY (daylight fixtures / portal bleed): both systems are PostUpdate,
+            // chained before `global_light::classify_light_lanes`.
+            (
+                "lighting/daylight.rs",
+                "update_daylight_fixtures + update_bleed_fixtures: PostUpdate",
+            ),
+            // GFX (moonlight): chained in PostUpdate between build_light_data and the packer.
+            (
+                "lighting/moonlight.rs",
+                "update_moonlight: PostUpdate, chained before pack_monkey_frame",
+            ),
+            (
+                "clouds/layer.rs",
+                "update_cloud_fx is registered in CloudsPlugin with LightingConsumeSet",
+            ),
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut offenders = Vec::new();

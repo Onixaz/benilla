@@ -15,6 +15,10 @@ impl Plugin for AssetPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, open_world_assets.in_set(AssetSet::Open));
         app.add_systems(Update, (evict_world_art, scope_world_art));
+        // MONKEY (torch shadows Phase 3A): the shared torch depth image + table buffer's extract
+        // plugins and per-frame table upload — always on, like the light buffer's, because every
+        // model material binds them (`open_world_assets` creates them below).
+        crate::static_gx::register_torch_shared(app);
     }
 }
 
@@ -43,14 +47,37 @@ fn scope_world_art(mut scope: ArtScope, assets: Option<ResMut<WorldAssets>>) {
     }
 }
 
-/// Opens the patch chain found by [`benilla_formats::wow_data`] and inserts [`WorldAssets`] and
-/// [`RenderConfig`]; with no install, `WorldAssets` is absent and startup falls back to free-fly.
-fn open_world_assets(mut commands: Commands, device: Res<RenderDevice>) {
-    // Inserted before the install lookup so no early return skips it: even with no install,
-    // `particles::model::update_model_particles` takes it as a hard `Res<SharedLightBuffer>`.
+/// Open the vanilla patch chain from wherever the install is ([`benilla_formats::wow_data`] —
+/// `$WOW_DATA`, the project folder on a dev build, else beside the binary; decision 1175) and
+/// insert the shared [`WorldAssets`] (chain + dedup caches) + [`RenderConfig`]. If the client data
+/// can't be found or opened, `WorldAssets` is simply absent and downstream startup falls back to
+/// an empty free-fly scene.
+fn open_world_assets(
+    mut commands: Commands,
+    device: Res<RenderDevice>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    // The one shared global-light buffer, created here (RenderDevice is live by Startup) so it exists
+    // before any material is built. Inserted FIRST — ahead of the install lookup, so no early return
+    // below can skip it: it is cloned into `WorldAssets` (for model materials) and read as the
+    // `SharedLightBuffer` resource by the terrain streamer, the model/particle lanes and the
+    // render-world upload. Always present — even with no client data — so the render upload has a
+    // target; harmless if unused. It used to be created *after* the lookup, so a client that found no
+    // install had no buffer at all and `particles::model::update_model_particles` — a hard
+    // `Res<SharedLightBuffer>` — could not validate (decision 1451).
     let shared_light = crate::lighting::new_shared_light_buffer(&device);
     let light_buf = shared_light.0.clone();
     commands.insert_resource(shared_light);
+    // MONKEY (torch shadows Phase 3A): the shared torch depth image + table buffer, on the same
+    // always-present rule and for the same reason — every model material binds them, and a
+    // material built against a missing image never gets a bind group (every model blanks).
+    let (torch_image, torch_buffer) = crate::static_gx::new_torch_shared(&device, &mut images);
+    let torch = benilla_assets::materials::TorchBinds {
+        depth: torch_image.0.clone(),
+        table: torch_buffer.0.clone(),
+    };
+    commands.insert_resource(torch_image);
+    commands.insert_resource(torch_buffer);
     let Some(data) = benilla_formats::wow_data() else {
         warn!(
             "no WoW install found — looked in {:?}; starting with no world",
@@ -66,7 +93,7 @@ fn open_world_assets(mut commands: Commands, device: Res<RenderDevice>) {
     commands.insert_resource(RenderConfig { unload_budget });
 
     match open_chain(&data) {
-        Ok(chain) => commands.insert_resource(WorldAssets::open(chain, light_buf)),
+        Ok(chain) => commands.insert_resource(WorldAssets::open(chain, light_buf, torch)),
         Err(e) => error!("failed to open client data: {e:#}"),
     }
 }

@@ -63,12 +63,18 @@ impl Plugin for CloudsPlugin {
                     // air's density and palette rather than the water's.
                     tick_clouds
                         .after(crate::liquid::SubmersionVerdict)
-                        .in_set(crate::lighting::LightingConsumeSet),
+                        .in_set(crate::lighting::LightingConsumeSet)
+                        .in_set(CloudTick),
                     // After the skybox resolve and the submersion verdict, so the dome hides in
                     // the same frame as the rest of the sky.
                     layer::apply_cloud_visibility
                         .after(crate::skybox::SkyboxResolve)
                         .after(crate::liquid::SubmersionVerdict),
+                    // MONKEY (sky): the High cloud shading's per-frame inputs.
+                    // MONKEY (fix-sky): after this frame's tile, deterministically.
+                    layer::update_cloud_fx
+                        .in_set(crate::lighting::LightingConsumeSet)
+                        .after(CloudTick),
                 ),
             )
             // Camera-anchored after transform propagation, like the sky dome.
@@ -81,6 +87,11 @@ impl Plugin for CloudsPlugin {
 
 /// Advances the coverage field (a full rebuild first, then the 10 Hz band scroll) and re-uploads
 /// its texels when they change, as the reference does per regen (`0x58ac70`).
+/// MONKEY (fix-sky): the cloud tile/coverage update, so the sky and cloud FX readers can order
+/// after it (review B9: the ambiguous order made the glow's cover sample frame-nondeterministic).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct CloudTick;
+
 fn tick_clouds(
     mut cov: ResMut<CloudCoverage>,
     light: Res<WowLighting>,

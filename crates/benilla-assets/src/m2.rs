@@ -218,6 +218,59 @@ pub struct ModelRibbon {
 pub struct ModelLight {
     pub def: M2Light,
     pub bone_pivot: [f32; 3],
+    /// MONKEY (fire GO lights): `true` when this light was **synthesised** from the model's flame
+    /// particle emitter rather than read off an authored light block
+    /// ([`benilla_formats::fire_light`]). Only ~17 of the ~430 fire-ish props in the chain author
+    /// one, so without this every wall torch, magic brazier, forge and candle in the game lights
+    /// nothing.
+    ///
+    /// The flag exists so a lane can REFUSE it, and one does: the WMO MODD prop lane. A building's
+    /// own MOLT fixtures already sit at its wall torches' flames (the artists place a companion
+    /// MOLT per fixture doodad — NSabbey ships one per candelabra), so a synthetic light on the
+    /// prop would double-light exactly the interiors that are already correct. Every other lane —
+    /// ADT map doodads, GameObjects/creatures, transport props — takes it like an authored one.
+    pub synthetic: bool,
+    /// MONKEY (flame flicker): `true` when the synthesis took the **FLAME** route — an additive
+    /// fire particle emitter ([`benilla_formats::synthesize_fire_light`]) — as opposed to the LAMP
+    /// route ([`benilla_formats::synthesize_lamp_light`]: a lamppost's unlit glass geoset). Always
+    /// `false` on an authored block.
+    ///
+    /// `synthetic` alone cannot answer this, and the difference is exactly what decides whether the
+    /// light FLICKERS: an open flame does, and a flame of any colour does (the ogre's purple wall
+    /// torch and `HumanBrazierMagic`'s green fire are fires with odd chemistry); a lamp behind
+    /// glass does not, and a street lamp that breathed would read as a fault in the city rather
+    /// than as fire. Keying on the ROUTE rather than on the hue is what gets both right — see
+    /// `benilla_world::lighting::flame_kind_for`.
+    pub flame: bool,
+    /// MONKEY (spell light): `true` when this light came from the **SPELL** route
+    /// ([`benilla_formats::synthesize_spell_light`]) — a spell effect's or a firework's emitter.
+    /// Always `false` on an authored block and on the two world routes.
+    ///
+    /// It exists so the PLACED lanes can keep refusing spell content exactly as they did before
+    /// this feature (`benilla_world::terrain_stream::spawn`'s `spawn_lights_for`): the world light
+    /// table is built for fixtures that stand still for minutes, and an effect model that happens
+    /// to be placed as scenery must not enter it. Only the ENTITY lanes — a spell-visual instance,
+    /// a missile, a firework GameObject — take it, and there it is budgeted, enveloped and reaped
+    /// with its effect (`entities::carried_light`'s spell-light helper).
+    ///
+    /// It also carries the light's **onset**: `benilla_formats::fire_light::emit_onset`, the delay
+    /// before the emitter this light stands for actually fires. A firework's shell detonates half
+    /// a second into its model's clip, and a light lit at spawn would flash the rocket's flight
+    /// instead of its burst.
+    pub spell: Option<SpellLightInfo>,
+}
+
+/// MONKEY (spell light): what a spell/firework-derived [`ModelLight`] carries beyond the light
+/// itself — see [`ModelLight::spell`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpellLightInfo {
+    /// The school judged at synthesis ([`benilla_formats::SpellLightKind`]) — for the trace and
+    /// for any future per-school gain. Never `None` (that case yields no light at all).
+    pub kind: benilla_formats::SpellLightKind,
+    /// Seconds from the instance's birth before the light comes up (the emitter's rate-track
+    /// onset). `0.0` for everything with a constant emission rate, which is every missile and
+    /// every kit glow.
+    pub onset: f32,
 }
 
 /// Bevy [`AssetLoader`] decoding `*.m2` → [`M2Model`].
@@ -371,7 +424,9 @@ impl AssetLoader for M2ModelLoader {
             })
             .collect();
 
-        let lights = light_defs
+        // M2 lights: the same host-bone pivot bake, so a light on an animating model (the torch in
+        // an NPC's hand) can ride its bone's joint instead of freezing at the rest-pose spot.
+        let mut lights: Vec<ModelLight> = light_defs
             .into_iter()
             .map(|def| ModelLight {
                 bone_pivot: skeleton_raw
@@ -379,8 +434,129 @@ impl AssetLoader for M2ModelLoader {
                     .get(def.bone as usize)
                     .map_or([0.0; 3], |b| b.pivot),
                 def,
+                synthetic: false,
+                flame: false,
+                spell: None,
             })
             .collect();
+        // MONKEY (fire GO lights) / MONKEY (lamp lights): a prop that authors NO casting light gets
+        // ONE derived from what it DOES author — its flame emitter, or (lamps, lanterns, sconces,
+        // chandeliers, which author no particles whatsoever) its unlit glass geoset. Both rules,
+        // their calibration and the `benilla-extract m2firescan` audit live in
+        // [`benilla_formats::fire_light`]. This is the single site the synthesis happens, so every
+        // lane that already consumes `M2Model::lights` inherits it for free and nothing downstream
+        // has to know an emitter or a render batch was ever read.
+        //
+        // Gated on `casts()` and not on emptiness: an authored block ALWAYS wins, including the
+        // directional-only and visibility-off shapes — a model whose one light block is authored
+        // dark was authored dark on purpose.
+        if !lights.iter().any(|l| l.def.casts()) {
+            let path = ctx.path().path().to_string_lossy().to_string();
+            // The FLAME route first, then the LAMP route — never both. The flame wins because it
+            // carries a REAL colour (read off the artist's own over-life ramp) where the lamp route
+            // can only pick a plausible one from a name; a model with both a flame and lamp glass
+            // (`OrcBrazierStreetLamp`) should take the measured hue, not the guessed one. Each
+            // yields the same four things: model-space position, host bone, colour, intensity —
+            // plus, MONKEY (flame flicker), WHICH route won, because that is what decides whether
+            // the light burns (flickers) or merely shines (see [`ModelLight::flame`]).
+            //
+            // MONKEY (spell light): and a THIRD route ahead of both — SPELL effects and FIREWORKS,
+            // which the two world rules veto by path (`fire_light::is_spell_path`). They are put
+            // first because the veto is theirs: a model that IS spell content can never be a
+            // placed prop, so there is nothing for the other two to say about it. What comes back
+            // is flagged ([`ModelLight::spell`]) so the PLACED lanes can keep refusing it exactly
+            // as they do today — only the entity lanes, which reap a light with its effect, take
+            // one.
+            let synth =
+                benilla_formats::synthesize_spell_light(&path, emitters.iter().map(|e| &e.def))
+                    .map(|fx| {
+                        let src = &emitters[fx.emitter].def;
+                        (
+                            src.position,
+                            src.bone,
+                            fx.color,
+                            fx.intensity,
+                            // Never a FLAME for the flicker's purposes: a spell light runs its own
+                            // lifecycle envelope (ramp in / hold / decay) and a fire wobble on top of it
+                            // would read as the effect stuttering, not as fire breathing.
+                            false,
+                            Some(SpellLightInfo {
+                                kind: fx.kind,
+                                onset: fx.onset,
+                            }),
+                        )
+                    })
+                    .or_else(|| {
+                        benilla_formats::synthesize_fire_light(
+                            &path,
+                            emitters.iter().map(|e| &e.def),
+                        )
+                        .map(|fire| {
+                            let src = &emitters[fire.emitter].def;
+                            (
+                                src.position,
+                                src.bone,
+                                fire.color,
+                                fire.intensity,
+                                true,
+                                None,
+                            )
+                        })
+                    })
+                    .or_else(|| {
+                        // MONKEY (lamp lights): a lamppost/lantern/chandelier authors NO particle emitter
+                        // at all — its glow is an UNLIT (render-flag 0x01) glass geoset. The rule reads the
+                        // already-built render batches, so nothing extra is parsed; the position it returns
+                        // is that geoset's CENTROID (the lamp head, 4-5 yd up a lamppost), never the model
+                        // origin at the base of the pole. `bounds` is the fallback for a name-route hit
+                        // whose glass we can't find — see `fire_light::lamp_position`.
+                        let batches: Vec<benilla_formats::EmissiveBatch<'_>> = submeshes
+                            .iter()
+                            .map(|s| benilla_formats::EmissiveBatch::from(&*s.geometry))
+                            .collect();
+                        let bbox = bounds.as_ref().map(|b| (b.bbox_min, b.bbox_max));
+                        benilla_formats::synthesize_lamp_light(&path, &batches, bbox)
+                            .map(|l| (l.position, l.bone, l.color, l.intensity, false, None))
+                    });
+            if let Some((position, src_bone, color, intensity, flame, spell)) = synth {
+                // The light sits at the FLAME (or the lamp glass), not the model origin: a brazier's
+                // origin is under its bowl, and a light there back-lights the bowl into every
+                // surface it should be lighting (and self-shadows through the prop's own caster
+                // mesh, which the torch lane includes). Same bone convention as an authored light —
+                // a bone the skeleton doesn't carry reads as `-1` (model origin), which is what a
+                // boneless prop is.
+                let bone = i16::try_from(src_bone)
+                    .ok()
+                    .filter(|_| (src_bone as usize) < skeleton_raw.bones.len())
+                    .unwrap_or(-1);
+                lights.push(ModelLight {
+                    def: M2Light {
+                        light_type: 1, // point — the hot-spot caster; the whole reason we're here
+                        bone,
+                        position,
+                        // Diffuse only, like every world light the reference commits (its ambient
+                        // and specular are zero on world props — decision 0273).
+                        ambient_color: [0.0; 3],
+                        ambient_intensity: 0.0,
+                        diffuse_color: color,
+                        diffuse_intensity: intensity,
+                        // The GL curve is fixed (`1/(0.7d+0.03d²)`) and ignores these; they are a
+                        // cull hint no consumer reads, so a synthesised light authors none.
+                        attenuation_start: 0.0,
+                        attenuation_end: 0.0,
+                        bone_z: [0.0, 0.0, 1.0], // point lights have no direction basis
+                        visibility_off: false,
+                    },
+                    bone_pivot: skeleton_raw
+                        .bones
+                        .get(src_bone as usize)
+                        .map_or([0.0; 3], |b| b.pivot),
+                    synthetic: true,
+                    flame,
+                    spell,
+                });
+            }
+        }
         let (skeleton, inverse_bindposes) = build_skeleton(&skeleton_raw);
         let inverse_bindposes = ctx.add_labeled_asset(
             "inverse_bindposes".to_string(),

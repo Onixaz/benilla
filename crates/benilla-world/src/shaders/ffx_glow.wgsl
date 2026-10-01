@@ -63,7 +63,7 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
-// Deviation, opt-in (`WOW_DITHER=1`): a dither against banding, which the reference's 8-bit
+// Deviation, opt-in (MONKEY p0: cvar `skyDither`, or `WOW_DITHER=1`): a dither against banding, which the reference's 8-bit
 // framebuffer lacks. The hash is Bevy's `screen_space_dither`, copied here because Bevy applies
 // it only in the tonemapping pass that `Tonemapping::None` skips.
 fn screen_space_dither(frag_coord: vec2<f32>) -> vec3<f32> {

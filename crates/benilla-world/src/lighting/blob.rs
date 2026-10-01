@@ -7,7 +7,7 @@ use bevy::render::render_resource::{Buffer, BufferDescriptor, BufferUsages};
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 
 use super::global_light::{
-    commit_raw, light_blob_bytes, pack_model_core_rows, LIGHT_HEADER_ROWS, MAX_POINT_LIGHTS,
+    commit_raw, light_blob_bytes, pack_model_core_rows, LIGHT_HEADER_ROWS, MAX_LIVE_POINT_LIGHTS,
 };
 use super::prop_probes::prop_probe_region_offset;
 use super::sh::prop_probe_coeffs;
@@ -62,11 +62,17 @@ impl LightBlob {
         self
     }
 
-    /// Adds a point light, its colour committed raw by [`commit_raw`]. Past the table's capacity a
-    /// light is dropped with a warning, never written over the probe region that follows.
+    /// Add a point light: position, range, and its diffuse colour **before** the raw commit (the
+    /// over-gamut commit law is applied here — see [`commit_raw`]).
+    ///
+    /// Silently capped at the table's LIVE capacity; past it a light is dropped rather than written
+    /// over the probe region that follows. MONKEY (ext light k8): that cap is
+    /// [`MAX_LIVE_POINT_LIGHTS`] (255), not the 256-slot buffer size — index 255 is the shaders'
+    /// `EXT_SEL_EMPTY` sentinel, so a light seated there would end every draw unit's selection list
+    /// early. Mirrors the truncation `build_light_data` applies to the scene table.
     pub fn point(mut self, pos: Vec3, range: f32, color: [f32; 3]) -> Self {
-        if self.points.len() / 2 >= MAX_POINT_LIGHTS {
-            warn!("light blob: over {MAX_POINT_LIGHTS} point lights — dropping the rest");
+        if self.points.len() / 2 >= MAX_LIVE_POINT_LIGHTS {
+            warn!("light blob: over {MAX_LIVE_POINT_LIGHTS} point lights — dropping the rest");
             return self;
         }
         let c = commit_raw(color);
@@ -130,6 +136,9 @@ impl LightBlob {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // MONKEY (ext light k8): only the cap test needs the SLOT count now — the builder caps on the
+    // LIVE one.
+    use super::super::global_light::MAX_POINT_LIGHTS;
 
     #[test]
     fn a_plain_model_blob_carries_the_off_world_defaults() {
@@ -163,14 +172,24 @@ mod tests {
         );
     }
 
+    /// Past the table's LIVE capacity a light is dropped, never written over the probe region that
+    /// follows it in the buffer.
+    ///
+    /// MONKEY (ext light k8): that capacity is 255, ONE SHORT of the 256-slot buffer, because the
+    /// shaders' packed per-draw-unit selection now uses 8 bits per rank and reserves index 255 as
+    /// `EXT_SEL_EMPTY`. The last two assertions pin that relationship: if the cap is ever "tidied"
+    /// back up to the slot count, a 256th light packs as the end-of-list sentinel and every draw
+    /// unit that selected it silently drops the rest of its lights — a bug with no log line.
     #[test]
     fn the_point_table_stops_at_capacity() {
         let mut b = LightBlob::model([0.0; 3], [0.0; 3], Vec3::NEG_Y);
         for _ in 0..MAX_POINT_LIGHTS + 32 {
             b = b.point(Vec3::ZERO, 1.0, [1.0; 3]);
         }
-        assert_eq!(b.point_count(), MAX_POINT_LIGHTS);
-        assert_eq!(b.points.len(), 2 * MAX_POINT_LIGHTS);
+        assert_eq!(b.point_count(), MAX_LIVE_POINT_LIGHTS);
+        assert_eq!(b.points.len(), 2 * MAX_LIVE_POINT_LIGHTS);
+        assert_eq!(MAX_LIVE_POINT_LIGHTS, MAX_POINT_LIGHTS - 1);
+        assert!(MAX_LIVE_POINT_LIGHTS <= 255, "EXT_SEL_EMPTY is index 255");
     }
 
     /// The glue scene's fog toggle flips only the enable and leaves the race's fog rows standing.

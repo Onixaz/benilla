@@ -177,7 +177,9 @@ pub(super) fn update_time_lighting(
     eye_liquid: crate::liquid::EyeLiquid,
     viewer: Res<crate::view::Viewer>,
     weather: Option<Res<crate::weather::WeatherState>>,
-    view: Res<crate::view::ViewDistance>,
+    // MONKEY (fog): paired with the fog-model setting (Modern decouples the fog end from farclip
+    // past the reference ceiling); a tuple keeps the system under Bevy's 16-parameter limit.
+    (view, fog_setting): (Res<crate::view::ViewDistance>, Res<super::FogModelSetting>),
     time: Res<Time>,
     wmo_fog: Res<crate::wmo_portal::CameraWmoFog>,
     mut wmo_ramp: ResMut<WmoCrossfade>,
@@ -250,7 +252,12 @@ pub(super) fn update_time_lighting(
 
     // Elwynn commits 125/500 clear and −139/278 at full storm (`0x6cee30`): the negative start is
     // the near veil, and the short storm end whites out the middle distance.
-    let (fog_start, fog_end) = scene_fog(atmo.fog_end, atmo.fog_start_frac, view.farclip);
+    let (fog_start, fog_end) = if fog_setting.modern() {
+        // MONKEY (fog): identical up to farclip 777, then the end grows with the view distance.
+        super::fog_model::modern_fog_end(atmo.fog_end, atmo.fog_start_frac, view.farclip)
+    } else {
+        scene_fog(atmo.fog_end, atmo.fog_start_frac, view.farclip)
+    };
     // The interior crossfade is its own triple; the scene fog stays untouched. Submerged, the
     // underwater param owns the fog and the ramp is bypassed, as the reference snaps it for magma
     // and slime inside an MFOG interior (`0x6cef6f`); the reference's MFOG underwater block

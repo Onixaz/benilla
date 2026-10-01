@@ -127,6 +127,20 @@ const GAP: &[(&str, &str, &str)] = &[
          nothing moves and `ui_char.rs`'s feed has nothing to announce — the stock SkillFrame \
          would only repaint under its own Close",
     ),
+    // MONKEY (integration): the two temp-point verbs, the same case as `CancelSkillUps` (pre-existing
+    // upstream gap, surfaced once the Windows path fix let this gate run).
+    (
+        "AddSkillUp",
+        "SKILL_LINES_CHANGED",
+        "the reference's helper 0x4d32d0 moves a temp point and fires; the temp-point table stays \
+         empty in this model (`skills.rs`), and `ui_char.rs`'s feed fires on any real block change",
+    ),
+    (
+        "RemoveSkillUp",
+        "SKILL_LINES_CHANGED",
+        "the reference's helper 0x4d3480, the same as AddSkillUp: no temp points to move here, and \
+         `ui_char.rs`'s feed fires on any real block change",
+    ),
     (
         "ClickTargetTradeButton",
         "TRADE_REPLACE_ENCHANT",
@@ -238,7 +252,8 @@ fn quoted(text: &str, name: &str) -> bool {
 }
 
 fn short(p: &std::path::Path) -> String {
-    let s = p.to_string_lossy();
+    // MONKEY (integration): Windows paths use a backslash; the rows are written with `/`.
+    let s = p.to_string_lossy().replace('\\', "/");
     s.split_once("/crates/")
         .map_or(s.to_string(), |(_, t)| t.to_string())
 }
@@ -324,7 +339,7 @@ fn the_declared_rows_are_still_true() {
         }
         let named: Vec<&(PathBuf, String)> = src
             .iter()
-            .filter(|(p, _)| p.to_string_lossy().ends_with(file))
+            .filter(|(p, _)| short(p).ends_with(file)) // MONKEY (integration): separator-agnostic
             .collect();
         if named.is_empty() {
             wrong.push(format!(

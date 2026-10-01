@@ -4,9 +4,15 @@
 //! a region draws once every member's `GpuImage` is resident.
 
 use bevy::camera::primitives::Aabb;
+use bevy::core_pipeline::oit::OrderIndependentTransparencySettingsOffset;
 use bevy::ecs::query::QueryItem;
 use bevy::image::Image;
 use bevy::mesh::VertexBufferLayout;
+use bevy::pbr::{
+    MeshPipeline, MeshPipelineViewLayoutKey, MeshViewBindGroup, ViewEnvironmentMapUniformOffset,
+    ViewFogUniformOffset, ViewLightProbesUniformOffset, ViewLightsUniformOffset,
+    ViewScreenSpaceReflectionsUniformOffset,
+};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::diagnostic::RecordDiagnostics;
@@ -19,14 +25,12 @@ use bevy::render::render_graph::{
     NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
 };
 use bevy::render::render_resource::binding_types::{
-    sampler, storage_buffer_read_only_sized, texture_2d_array, uniform_buffer, uniform_buffer_sized,
+    sampler, storage_buffer_read_only_sized, texture_2d_array, uniform_buffer_sized,
 };
 use bevy::render::render_resource::*;
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
-use bevy::render::view::{
-    ExtractedView, Msaa, ViewDepthTexture, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms,
-};
+use bevy::render::view::{ExtractedView, Msaa, ViewDepthTexture, ViewTarget, ViewUniformOffset};
 use bevy::render::{Render, RenderSystems};
 use bevy::shader::ShaderDefVal;
 use std::ops::Range;
@@ -51,6 +55,14 @@ pub(crate) struct GxItemDraw {
     pub sidn: [u8; 3],
     /// The interior prop's SH-probe slot, record column w bits 1..=13; 0 elsewhere.
     pub slot: u16,
+    /// MONKEY (ext-class night law): this is an EXTERIOR-class WMO batch at BUILDING scale — the
+    /// record table's bit 27 (see [`RECORD_EXT_NIGHT_BIT`]). False on cells, props and interior
+    /// batches.
+    pub ext_night: bool,
+    /// MONKEY (enclosed day floor): this is an INTERIOR-class WMO batch whose group sits inside a
+    /// building-scale shell — the record table's bit 28 (see [`RECORD_ENCLOSED_BIT`]). False on
+    /// cells, props, exterior batches, and every group of a dungeon (which authors no shell).
+    pub enclosed: bool,
 }
 
 /// One baked cell or region, published by the main-world flush.
@@ -125,8 +137,51 @@ use super::pool::GxTexturePool;
 /// kill bit and bits 1..=13 the probe slot.
 const RECORD_FOG_BIT: u32 = 1 << 14;
 
-/// One coalesced draw run of adjacent live items sharing bind-group slot, pipeline bucket and
-/// selection key; a killed item is never in one.
+/// MONKEY (room gate): record column `w` bits 15..=26 — the item's ROOM KEY, `group + 1` so that
+/// **0 means "this item names no room"** and the shader's gate lets every fixture through (a
+/// terrain-cell item; a WMO prop whose referrer set is not exactly one group). Bit 14 is the fog
+/// lane, so 15 is the first free bit, and 12 bits covers every shipped WMO (the largest,
+/// Stratholme, has 92 groups). **Keep in sync with `static_gx.wgsl`'s `RECORD_ROOM_SHIFT` /
+/// `RECORD_ROOM_MASK`.**
+const RECORD_ROOM_SHIFT: u32 = 15;
+const RECORD_ROOM_MASK: u32 = 0xfff;
+
+/// MONKEY (ext-class night law): record column `w`, bit 27 — this batch's group is EXTERIOR-class
+/// but at BUILDING scale (an inn's shell, a basement stairwell), so after dark `static_gx.wgsl`
+/// blends it off the sky-lit exterior law and onto the interior room law. The room key occupies
+/// bits 15..=26, so 27 is the first free bit. **Keep in sync with `static_gx.wgsl`'s
+/// `RECORD_EXT_NIGHT`.**
+const RECORD_EXT_NIGHT_BIT: u32 = 1 << 27;
+
+/// MONKEY (enclosed day floor): record column `w`, bit 28 — this batch's group is an INTERIOR room
+/// inside a building-scale exterior shell, so by day `static_gx.wgsl` gives its room law a
+/// sun-driven ambient floor (the daylight a doorway lets in, for the doorways this renderer cannot
+/// locate). Bit 27 is the night law, so 28 is the first free bit; bits 29..=31 remain free.
+/// **Keep in sync with `static_gx.wgsl`'s `RECORD_ENCLOSED`.**
+const RECORD_ENCLOSED_BIT: u32 = 1 << 28;
+
+/// The room key for one baked item: `group + 1` for a WMO surface batch, and for a PROP batch whose
+/// referrer set names exactly one group (a prop in one room — the common case); 0 for a terrain
+/// cell, and for a multi-room prop, which stays ungated because a single key cannot express it.
+fn room_key(item: &GxItemDraw, sets: &[std::sync::Arc<[u16]>]) -> u32 {
+    let Some(sel) = item.group else {
+        return 0; // a cell item: no building, no room
+    };
+    let group = if sets.is_empty() {
+        sel // a WMO region's selection grain IS the group
+    } else {
+        match sets.get(usize::from(sel)).map(|s| &s[..]) {
+            Some([g]) => *g,
+            _ => return 0, // unnamed or multi-room prop
+        }
+    };
+    (u32::from(group) + 1).min(RECORD_ROOM_MASK) << RECORD_ROOM_SHIFT
+}
+
+/// One coalesced draw run: adjacent live bake items sharing (bind-group slot, pipeline
+/// bucket, group). Killed items are SKIPPED at build time (B3): a run never carries an exiled
+/// or gone item, so a far cell of fully-faded faders submits no vertex work at all (the WGSL
+/// kill-bit collapse stays as the belt for the same frame's record table).
 struct GxRun {
     /// Index into the region's `bind_groups`, not a pool class.
     slot: usize,
@@ -166,20 +221,46 @@ struct GxGpuCache {
 struct GxPipelines {
     view_layout: BindGroupLayoutDescriptor,
     cell_layout: BindGroupLayoutDescriptor,
+    light_layout: BindGroupLayoutDescriptor,
+    /// MONKEY (torch shadows Phase 1): group 3 — the torch depth array + comparison sampler + the
+    /// ≤16-entry `TorchTable` uniform. Present on every static_gx pipeline (`TORCH_SHADOWS` def).
+    torch_layout: BindGroupLayoutDescriptor,
     sampler: Sampler,
     sampler_clamp: Sampler,
     /// Keyed `(cutout, two_sided)`, re-specialized if the world view's (samples, format) changes.
     pipelines: HashMap<(bool, bool), CachedRenderPipelineId>,
-    specialized_for: Option<(u32, TextureFormat)>,
+    /// MONKEY (sun shadow perf): the key now carries the live `shadowFilter` too — the PCF branch
+    /// is a shader DEF, so a change has to re-specialize the family. Once per CHANGE, not per
+    /// frame: exactly the posture the (samples, format) pair beside it already has, and the same
+    /// caveat (a flip re-queues four pipelines rather than reviving the previous four — a cvar
+    /// A/B costs a shader build, a rendered frame costs nothing).
+    specialized_for: Option<(u32, TextureFormat, bool)>,
 }
 
-fn init_pipelines(mut commands: Commands, render_device: Res<RenderDevice>) {
-    let view_layout = BindGroupLayoutDescriptor::new(
-        "static_gx_view_layout",
+fn init_pipelines(
+    mut commands: Commands,
+    mesh_pipeline: Res<MeshPipeline>,
+    render_device: Res<RenderDevice>,
+) {
+    // Use Bevy's real mesh-view layout for the retained pass. Besides the view and light records,
+    // this carries the directional shadow textures and comparison samplers produced for the
+    // world camera. The old two-binding layout could render the city, but it had no legal way for
+    // `static_gx.wgsl` to receive the shadow map.
+    let view_layout = mesh_pipeline
+        .get_view_layout(MeshPipelineViewLayoutKey::empty())
+        .main_layout
+        .clone();
+    // The pass's own extra (group 2): the shared light storage.
+    // MONKEY (room gate): binding 1 is the per-fixture ROOM CLAIM table — which WMO groups each
+    // packed interior fixture may light. Its own buffer, never a `WowLight` extension: that struct
+    // is mirrored by three shaders plus the portrait booth and a resize there vanishes every
+    // building in the world.
+    let light_layout = BindGroupLayoutDescriptor::new(
+        "static_gx_light_layout",
         &BindGroupLayoutEntries::sequential(
             ShaderStages::VERTEX_FRAGMENT,
             (
-                uniform_buffer::<ViewUniform>(true),
+                storage_buffer_read_only_sized(false, None),
                 storage_buffer_read_only_sized(false, None),
             ),
         ),
@@ -199,11 +280,42 @@ fn init_pipelines(mut commands: Commands, render_device: Res<RenderDevice>) {
             ),
         ),
     );
-    // Repeat and clamp samplers, picked by the vertex word's wrap bits since a shared array has no
-    // per-layer address mode. Mip filter and anisotropy come from `benilla_assets::tex_filter`,
-    // the policy the reference applies to every texture from `[0x835250]`/`[0x835254]`. A
-    // mixed-wrap batch takes the repeat sampler and the shader clamps its clamped axis a half
-    // texel in; the reference clamps that axis in the sampler.
+    // TWO samplers per array — repeat and clamp, both matching the BLP loader's model albedo
+    // sampler exactly. Parity with `blp.rs` was always the rule here; what changed is that
+    // `blp.rs` no longer picks the numbers. The mip filter and the anisotropy are the process
+    // filter policy's (`benilla_assets::tex_filter`), which the reference forces onto every
+    // texture it creates from `[0x835250]`/`[0x835254]` — so this lane stays in step by asking
+    // the same question rather than by copying the same literals. The shader selects by the
+    // vertex word's wrap bits: a shared array cannot carry per-layer address modes. The rare
+    // MIXED-wrap batch (repeat one axis, clamp the other) keeps the repeat sampler plus the
+    // shader's half-texel inset clamp on its clamped axis — an approximation confined to that
+    // class (decision 0763's silhouette concern, honoured per axis).
+    // MONKEY (torch shadows Phase 1): group 3 — the interior torch depth map (a Depth32Float
+    // 2D-array sampled through a `GreaterEqual` comparison sampler) + the ≤16-entry `TorchTable`
+    // uniform (count/positions/view_projs). Fragment-only; declared behind the shader's
+    // `TORCH_SHADOWS` def, which the specialization below always sets for this pipeline family.
+    let torch_layout = BindGroupLayoutDescriptor::new(
+        "static_gx_torch_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::FRAGMENT,
+            (
+                // A depth 2D-array (= WGSL `texture_depth_2d_array`): no dedicated helper, so a
+                // `texture_2d_array` with the Depth sample type.
+                texture_2d_array(TextureSampleType::Depth),
+                sampler(SamplerBindingType::Comparison),
+                // MONKEY (static torch cache): count@0 (16), positions[16]@16 (256),
+                // view_projs[96]@272 (6144) = 6416 bytes. Both shader copies and the shared
+                // material storage buffer use these same bytes; a drift hides every building.
+                uniform_buffer_sized(
+                    false,
+                    Some(
+                        std::num::NonZero::new(super::torch_depth::TORCH_TABLE_BYTES)
+                            .expect("TORCH_TABLE_BYTES is non-zero"),
+                    ),
+                ),
+            ),
+        ),
+    );
     let filter = benilla_assets::tex_filter();
     let make = |label: &'static str, mode: AddressMode| {
         render_device.create_sampler(&SamplerDescriptor {
@@ -217,9 +329,22 @@ fn init_pipelines(mut commands: Commands, render_device: Res<RenderDevice>) {
             ..Default::default()
         })
     };
+    // MONKEY (room gate): the claim table's persistent GPU buffer, written every frame by
+    // `prepare_room_claims`. Created here (RenderStartup) rather than beside the shared light
+    // buffer so the whole binding — layout, buffer, upload — lives with its one reader.
+    commands.insert_resource(GxRoomClaims(render_device.create_buffer(
+        &BufferDescriptor {
+            label: Some("static_gx_room_claims"),
+            size: crate::lighting::room_claim_bytes(),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        },
+    )));
     commands.insert_resource(GxPipelines {
         view_layout,
         cell_layout,
+        light_layout,
+        torch_layout,
         sampler: make("static_gx_repeat", AddressMode::Repeat),
         sampler_clamp: make("static_gx_clamp", AddressMode::ClampToEdge),
         pipelines: HashMap::default(),
@@ -287,9 +412,15 @@ fn prepare_static_gx(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     asset_server: Res<AssetServer>,
+    mesh_pipeline: Res<MeshPipeline>,
     images: Res<RenderAssets<GpuImage>>,
     views: Query<GxViewKey>,
+    // MONKEY (sun shadow perf): the live `shadowFilter`, extracted from the main world. `Option`
+    // because `ExtractResourcePlugin` only publishes it while the lighting plugin is in the app
+    // (a bare static_gx harness has no lighting) — absent reads as the shipped Gaussian.
+    shadow_filter: Option<Res<crate::lighting::ShadowFilterGaussian>>,
 ) {
+    let shadow_gaussian = shadow_filter.is_none_or(|f| f.0);
     let _t = super::gx_perf_guard(3);
     let Some((view, msaa, _, _)) = views.iter().next() else {
         return;
@@ -299,14 +430,31 @@ fn prepare_static_gx(
     } else {
         TextureFormat::bevy_default()
     };
-    let key = (msaa.samples(), format);
+    let key = (msaa.samples(), format, shadow_gaussian);
     if pipes.specialized_for != Some(key) {
+        pipes.view_layout = mesh_pipeline
+            .get_view_layout(MeshPipelineViewLayoutKey::from(*msaa))
+            .main_layout
+            .clone();
         let shader: Handle<Shader> =
             asset_server.load("embedded://benilla_world/shaders/static_gx.wgsl");
         pipes.pipelines.clear();
         for cutout in [false, true] {
             for two_sided in [false, true] {
                 let mut defs = vec![];
+                // The retained pipeline is custom, so it must opt into the same PCF branch the
+                // world camera's `ShadowFilteringMethod` gives every Bevy-material receiver;
+                // otherwise `shadows::fetch_directional_shadow` falls back to a constant 1.0.
+                // MONKEY (sun shadow perf): that method is now the live `shadowFilter` cvar, so the
+                // def follows it — the ground and the buildings standing on it must filter alike.
+                defs.push(ShaderDefVal::from(if shadow_gaussian {
+                    "SHADOW_FILTER_METHOD_GAUSSIAN"
+                } else {
+                    "SHADOW_FILTER_METHOD_HARDWARE_2X2"
+                }));
+                // MONKEY (torch shadows Phase 1): arm the shader's group-3 torch-map code. Set on
+                // EVERY static_gx pipeline so the group-3 bindings (always bound by the node) match.
+                defs.push(ShaderDefVal::from("TORCH_SHADOWS"));
                 if cutout {
                     defs.push(ShaderDefVal::from("GX_CUTOUT"));
                 }
@@ -314,7 +462,12 @@ fn prepare_static_gx(
                     label: Some(
                         format!("static_gx c{} t{}", u8::from(cutout), u8::from(two_sided)).into(),
                     ),
-                    layout: vec![pipes.view_layout.clone(), pipes.cell_layout.clone()],
+                    layout: vec![
+                        pipes.view_layout.clone(),
+                        pipes.cell_layout.clone(),
+                        pipes.light_layout.clone(),
+                        pipes.torch_layout.clone(),
+                    ],
                     vertex: VertexState {
                         shader: shader.clone(),
                         shader_defs: defs.clone(),
@@ -387,6 +540,7 @@ fn prepare_static_gx(
                 };
                 if let Some(gpu) = assemble_region(
                     draw,
+                    0, // a terrain cell belongs to no building (MONKEY, room gate)
                     &mut pool,
                     &pipes,
                     &pipeline_cache,
@@ -406,6 +560,7 @@ fn prepare_static_gx(
                 };
                 if let Some(gpu) = assemble_region(
                     draw,
+                    entity.index().index(),
                     &mut pool,
                     &pipes,
                     &pipeline_cache,
@@ -427,6 +582,7 @@ fn prepare_static_gx(
         };
         if let Some(gpu) = assemble_region(
             draw,
+            entity.index().index(),
             &mut pool,
             &pipes,
             &pipeline_cache,
@@ -452,7 +608,8 @@ fn prepare_static_gx(
             continue;
         }
         for (i, rec) in gpu.records.iter_mut().enumerate() {
-            // Column w also carries the probe slot and fog bit: rewrite bit 0 alone.
+            // Column w carries the probe slot (B4) and the room key (MONKEY, room gate) in the
+            // high bits — rewrite only bit 0.
             rec[3] = (rec[3] & !1) | kill_bit(&draw.killed, i);
         }
         render_queue.write_buffer(&gpu.record_table, 0, bytemuck::cast_slice(&gpu.records));
@@ -494,6 +651,9 @@ fn prepare_static_gx(
 /// any member texture is not resident (slots already assigned stay assigned).
 fn assemble_region(
     draw: &GxCellDraw,
+    // MONKEY (room gate): this region's WMO placement instance (entity index), or 0 for a terrain
+    // cell — half of the surface room key the interior lane gates on.
+    room_instance: u32,
     pool: &mut GxTexturePool,
     pipes: &GxPipelines,
     pipeline_cache: &PipelineCache,
@@ -501,7 +661,14 @@ fn assemble_region(
     render_queue: &RenderQueue,
     images: &RenderAssets<GpuImage>,
 ) -> Option<GxCellGpu> {
-    // Each item's pool slot, deduped by texture id; untextured items take the white class.
+    // Resolve every item to a pool (class, layer) — deduped globally by texture id (many
+    // items share one texture: Stormwind's region carries 3,042 items over a few hundred
+    // distinct BLPs, and neighbouring cells repeat most of them; per-item layers blew the
+    // D2-array limit the moment a city root baked, and per-CELL arrays paid the driver churn
+    // 1431 measured). Untextured items ride the white class (never sampled — TEXTURED clear).
+    // MONKEY (room gate): whether this region can carry a room key at all (see the cell uniform
+    // below for the 2^24 bound and why both halves of the key must fail open together).
+    let gated = room_instance > 0 && room_instance < (1 << 24);
     let mut white: Option<u16> = None;
     let mut item_class_layer: Vec<(u16, u16)> = Vec::with_capacity(draw.draws.len());
     for item in &draw.draws {
@@ -527,7 +694,19 @@ fn assemble_region(
                 u32::from(item.sidn[0])
                     | (u32::from(item.sidn[1]) << 8)
                     | (u32::from(item.sidn[2]) << 16),
-                kill_bit(&draw.killed, i) | (u32::from(item.slot) << 1),
+                kill_bit(&draw.killed, i)
+                    | (u32::from(item.slot) << 1)
+                    | if gated { room_key(item, &draw.sets) } else { 0 }
+                    // MONKEY (ext-class night law): unconditional on `gated` — the night law is a
+                    // property of the GROUP's authored class and box, not of whether this region
+                    // could carry a room key. An ungated region's ext-class group still must not
+                    // read as night sky; its `interior_room_light` simply falls open, exactly as an
+                    // ungated interior group's already does.
+                    | if item.ext_night { RECORD_EXT_NIGHT_BIT } else { 0 }
+                    // MONKEY (enclosed day floor): unconditional on `gated` for the same reason —
+                    // "is this group a room in a building" is a fact about the authored group
+                    // table, not about whether this region could carry a room key.
+                    | if item.enclosed { RECORD_ENCLOSED_BIT } else { 0 },
             ]
         })
         .collect();
@@ -536,9 +715,27 @@ fn assemble_region(
         contents: bytemuck::cast_slice(&records),
         usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
     });
+    // MONKEY (room gate): the uniform's fourth lane was a hard 0.0 pad and now carries this
+    // REGION's building identity — the WMO placement instance's entity index — so the declared
+    // 16-byte size (and every bind-group layout built against it) does not move. Per REGION rather
+    // than per item, because a region is exactly one placement; that is what keeps the per-item key
+    // down to the group alone.
+    //
+    // As a NUMBER, not as bits: an entity index is a small integer and `f32::from_bits(12345)` is a
+    // DENORMAL, which a driver flushing denormals to zero would collapse to 0 — every building
+    // sharing identity 0, and every gate then a coin toss. An f32 holds every integer below 2^24
+    // exactly, which no live entity index approaches, so `as f32` / `u32()` is lossless. At or above
+    // that bound (and for a terrain cell, index 0) the region is packed UNGATED on BOTH lanes —
+    // identity AND per-item key — because half a key would fail CLOSED and black the building out.
+    let room_instance = if gated { room_instance } else { 0 };
     let cell_uniform = render_device.create_buffer_with_data(&BufferInitDescriptor {
         label: Some("static_gx_cell"),
-        contents: bytemuck::cast_slice(&[draw.origin.x, draw.origin.y, draw.origin.z, 0.0f32]),
+        contents: bytemuck::cast_slice(&[
+            draw.origin.x,
+            draw.origin.y,
+            draw.origin.z,
+            room_instance as f32,
+        ]),
         usage: BufferUsages::UNIFORM,
     });
     // One bind group per distinct pool class the region touches.
@@ -621,27 +818,185 @@ fn kill_bit(killed: &[u64], i: usize) -> u32 {
     )
 }
 
-/// Group 0: bevy's view uniform and the `wow_shared_light` storage every material binds.
+/// The retained pass's extra bind group (group 2): the shared light buffer — the SAME
+/// `wow_shared_light` storage every material binds (1429: identical lighting by construction) —
+/// Group 0 is Bevy's standard mesh-view bind group, which supplies the view matrices,
+/// directional-light records, and shadow textures.
 #[derive(Resource)]
-struct GxViewBind(BindGroup);
+struct GxLightBind(BindGroup);
+
+/// MONKEY (room gate): the persistent room-claim storage buffer (group 2, binding 1). Written whole
+/// every frame from the extracted [`crate::lighting::RoomClaimTable`] — 32 KB since MONKEY (soft
+/// portal claims) widened the record from 8 to 32 words (the per-claim fade), one `write_buffer`,
+/// and the table is rebuilt from scratch by the packer anyway, so there is nothing cheaper to
+/// diff against. Persistent so the per-region bind groups that reference it never need rebuilding.
+#[derive(Resource)]
+struct GxRoomClaims(Buffer);
+
+fn prepare_room_claims(
+    queue: Res<RenderQueue>,
+    buffer: Option<Res<GxRoomClaims>>,
+    claims: Option<Res<crate::lighting::RoomClaimTable>>,
+    // MONKEY (torch lane perf): the words last actually uploaded, keyed by the buffer they went to.
+    mut last: Local<Option<(BufferId, Vec<u32>)>>,
+) {
+    let (Some(buffer), Some(claims)) = (buffer, claims) else {
+        return;
+    };
+    // MONKEY (torch lane perf): skip the write when the table is bit-identical to what is already
+    // in the buffer. The packer does rebuild it from scratch every frame, but the RESULT is
+    // unchanged for as long as the player stands in one room with the same fixtures claiming it —
+    // which is most of the time indoors. A 32 KB `memcmp` costs a fraction of the 32 KB staging
+    // copy it saves, and the comparison is against what we WROTE, so it cannot disagree with the
+    // buffer's real contents.
+    let id = buffer.0.id();
+    if last
+        .as_ref()
+        .is_some_and(|(b, w)| *b == id && w[..] == claims.0[..])
+    {
+        return;
+    }
+    queue.write_buffer(&buffer.0, 0, bytemuck::cast_slice(&claims.0[..]));
+    // Reuse the cache's allocation where there is one — this runs on a frame where the claims
+    // genuinely changed, and a fresh 32 KB `Vec` per such frame would be churn for nothing.
+    if let Some((b, w)) = last.as_mut() {
+        if *b == id {
+            w.copy_from_slice(&claims.0[..]);
+            return;
+        }
+    }
+    *last = Some((id, claims.0.to_vec()));
+}
 
 fn prepare_view_bind(
     mut commands: Commands,
     pipes: Res<GxPipelines>,
     pipeline_cache: Res<PipelineCache>,
     render_device: Res<RenderDevice>,
-    view_uniforms: Res<ViewUniforms>,
     light: Option<Res<crate::lighting::SharedLightBuffer>>,
+    claims: Option<Res<GxRoomClaims>>,
 ) {
-    let (Some(view_binding), Some(light)) = (view_uniforms.uniforms.binding(), light) else {
+    let (Some(light), Some(claims)) = (light, claims) else {
         return;
     };
-    let layout = pipeline_cache.get_bind_group_layout(&pipes.view_layout);
-    commands.insert_resource(GxViewBind(render_device.create_bind_group(
-        "static_gx_view",
+    let layout = pipeline_cache.get_bind_group_layout(&pipes.light_layout);
+    commands.insert_resource(GxLightBind(render_device.create_bind_group(
+        "static_gx_light",
         &layout,
-        &BindGroupEntries::sequential((view_binding, light.0.as_entire_binding())),
+        &BindGroupEntries::sequential((light.0.as_entire_binding(), claims.0.as_entire_binding())),
     )));
+}
+
+/// The retained pass's group-3 bind group (MONKEY, torch shadows Phase 1): the interior torch depth
+/// array (Phase 3A: the shared [`super::torch_depth::TorchDepthImage`]'s `GpuImage` D2Array view —
+/// the same texture the entity receiver binds through its material) + static_gx's own comparison
+/// sampler (from [`super::torch_depth::TorchDepthTargets`]) and the `TorchTable` uniform packed from
+/// the extracted [`super::torch_depth::TorchShadowViews`] by the shared
+/// [`super::torch_depth::TorchTableUniform::pack`]. ALWAYS built (with `count = 0` and a zero table
+/// when the lane is off or absent) so the pipeline's group 3 is never left unbound — except while the
+/// shared image is not yet resident, when static_gx skips the frame (the node early-outs on a
+/// missing `GxTorchBind`).
+/// MONKEY (torch lane perf): the bind group is CACHED with the exact table bytes and the depth
+/// texture it was built over. Both used to be rebuilt from scratch every frame — a fresh 6416-byte
+/// uniform buffer plus a fresh `BindGroup` object, for contents that are identical on every frame
+/// the player stands still. Nothing else about the group can change while those two match: the
+/// sampler and the layout are `RenderStartup` singletons, and the texture id covers the one case
+/// where the shared image is ever re-prepared.
+#[derive(Resource)]
+struct GxTorchBind {
+    group: BindGroup,
+    table: super::torch_depth::TorchTableUniform,
+    texture: TextureId,
+}
+
+fn prepare_torch_bind(
+    mut commands: Commands,
+    pipes: Res<GxPipelines>,
+    pipeline_cache: Res<PipelineCache>,
+    render_device: Res<RenderDevice>,
+    targets: Option<Res<super::torch_depth::TorchDepthTargets>>,
+    views: Option<Res<super::torch_depth::TorchShadowViews>>,
+    image: Option<Res<super::torch_depth::TorchDepthImage>>,
+    images: Res<RenderAssets<GpuImage>>,
+    cached: Option<ResMut<GxTorchBind>>,
+) {
+    // The sampler/pipeline are created in RenderStartup; the shared image is prepared by the
+    // render-asset pass (before this set). Without either, group 3 has nothing to bind this frame.
+    let Some(targets) = targets else {
+        return;
+    };
+    let Some(gpu_image) = image.as_ref().and_then(|h| images.get(&h.0)) else {
+        return;
+    };
+    let table = super::torch_depth::TorchTableUniform::pack(views.as_deref());
+    let texture = gpu_image.texture.id();
+    // The compare is on the BYTES, not on the source resource's change tick: `TorchShadowViews` is
+    // republished every frame by the app lane whether or not anything in it moved, so a change
+    // detector here would never fire negative.
+    if let Some(mut cached) = cached {
+        if cached.texture == texture
+            && bytemuck::bytes_of(&cached.table) == bytemuck::bytes_of(&table)
+        {
+            return;
+        }
+        // Rebuild in place — one `Res` write instead of a deferred `insert_resource` per frame.
+        *cached = GxTorchBind {
+            group: build_torch_bind(
+                &pipes,
+                &pipeline_cache,
+                &render_device,
+                gpu_image,
+                targets.sampler(),
+                &table,
+            ),
+            table,
+            texture,
+        };
+        return;
+    }
+    commands.insert_resource(GxTorchBind {
+        group: build_torch_bind(
+            &pipes,
+            &pipeline_cache,
+            &render_device,
+            gpu_image,
+            targets.sampler(),
+            &table,
+        ),
+        table,
+        texture,
+    });
+}
+
+/// The group-3 bind group itself (see [`GxTorchBind`]) — the uniform buffer is created here because
+/// its contents ARE the cache key, so a new buffer is only ever made on a frame the table moved.
+fn build_torch_bind(
+    pipes: &GxPipelines,
+    pipeline_cache: &PipelineCache,
+    render_device: &RenderDevice,
+    gpu_image: &GpuImage,
+    sampler: &Sampler,
+    table: &super::torch_depth::TorchTableUniform,
+) -> BindGroup {
+    let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+        label: Some("static_gx_torch_table"),
+        contents: bytemuck::bytes_of(table),
+        usage: BufferUsages::UNIFORM,
+    });
+    let layout = pipeline_cache.get_bind_group_layout(&pipes.torch_layout);
+    render_device.create_bind_group(
+        "static_gx_torch",
+        &layout,
+        &BindGroupEntries::sequential((
+            // MONKEY (live bank rank): the image's default D2Array view spans all 144 layers:
+            // 96 STATIC faces addressed by matrices plus 48 LIVE copies addressed by the
+            // ascending set-bit rank in `count.z`. (wgpu's default view for a
+            // multi-layer 2D texture; `torch_depth.rs` spells out the guarantee).
+            &gpu_image.texture_view,
+            sampler,
+            buffer.as_entire_binding(),
+        )),
+    )
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
@@ -655,6 +1010,14 @@ impl ViewNode for StaticGxNode {
         &'static ViewTarget,
         &'static ViewDepthTexture,
         &'static ViewUniformOffset,
+        &'static ViewLightsUniformOffset,
+        &'static ViewFogUniformOffset,
+        &'static ViewLightProbesUniformOffset,
+        &'static ViewScreenSpaceReflectionsUniformOffset,
+        &'static ViewEnvironmentMapUniformOffset,
+        Option<&'static OrderIndependentTransparencySettingsOffset>,
+        &'static MeshViewBindGroup,
+        // The world camera only — a booth bake must never receive world cells (see the marker).
         &'static StaticGxView,
     );
 
@@ -662,7 +1025,19 @@ impl ViewNode for StaticGxNode {
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        (target, depth, view_offset, _marker): QueryItem<'w, '_, Self::ViewQuery>,
+        (
+            target,
+            depth,
+            view_offset,
+            view_lights,
+            view_fog,
+            view_light_probes,
+            view_ssr,
+            view_environment_map,
+            maybe_oit,
+            view_bind,
+            _marker,
+        ): QueryItem<'w, '_, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let _t = super::gx_perf_guard(4);
@@ -673,7 +1048,13 @@ impl ViewNode for StaticGxNode {
         let cache = world.resource::<GxGpuCache>();
         let pipes = world.resource::<GxPipelines>();
         let pipeline_cache = world.resource::<PipelineCache>();
-        let Some(view_bind) = world.get_resource::<GxViewBind>() else {
+        let Some(light_bind) = world.get_resource::<GxLightBind>() else {
+            return Ok(());
+        };
+        // MONKEY (torch shadows Phase 1): group 3 is part of every static_gx pipeline now, so it
+        // must be bound before any draw. `prepare_torch_bind` always builds it (count 0 when the
+        // lane is off); a missing one means the depth targets weren't ready — skip the frame.
+        let Some(torch_bind) = world.get_resource::<GxTorchBind>() else {
             return Ok(());
         };
         let meshes = world.resource::<RenderAssets<RenderMesh>>();
@@ -727,7 +1108,18 @@ impl ViewNode for StaticGxNode {
             occlusion_query_set: None,
         });
         let span = diagnostics.pass_span(&mut pass, "static_gx");
-        pass.set_bind_group(0, &view_bind.0, &[view_offset.offset]);
+        let mut view_offsets = vec![
+            view_offset.offset,
+            view_lights.offset,
+            view_fog.offset,
+            **view_light_probes,
+            **view_ssr,
+            **view_environment_map,
+        ];
+        if let Some(oit) = maybe_oit {
+            view_offsets.push(oit.offset);
+        }
+        pass.set_bind_group(0, &view_bind.main, &view_offsets);
         for (gpu, draw, sel) in &resolved {
             let Some(mesh) = meshes.get(draw.mesh.id()) else {
                 continue;
@@ -755,6 +1147,8 @@ impl ViewNode for StaticGxNode {
                 }
                 pass.set_render_pipeline(ready[&(run.cutout, run.two_sided)]);
                 pass.set_bind_group(1, &gpu.bind_groups[run.slot].1, &[]);
+                pass.set_bind_group(2, &light_bind.0, &[]);
+                pass.set_bind_group(3, &torch_bind.group, &[]);
                 pass.draw_indexed(
                     (islice.range.start + run.index_range.start)
                         ..(islice.range.start + run.index_range.end),
@@ -778,6 +1172,9 @@ pub(super) fn build(app: &mut App) {
     ));
     app.init_resource::<GxWorld>();
     app.add_systems(Update, mark_world_camera);
+    // MONKEY (torch shadows Phase 1): the depth-map targets + node (its own RenderStartup + graph
+    // wiring). Built before we borrow the render app below — the two borrows are sequential.
+    super::torch_depth::build(app);
     let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) else {
         return;
     };
@@ -789,7 +1186,10 @@ pub(super) fn build(app: &mut App) {
             Render,
             (
                 prepare_static_gx.in_set(RenderSystems::PrepareResources),
+                // MONKEY (room gate): before the bind groups, beside the shared light's upload.
+                prepare_room_claims.in_set(RenderSystems::PrepareResources),
                 prepare_view_bind.in_set(RenderSystems::PrepareBindGroups),
+                prepare_torch_bind.in_set(RenderSystems::PrepareBindGroups),
             ),
         )
         .add_render_graph_node::<ViewNodeRunner<StaticGxNode>>(Core3d, StaticGxLabel)
@@ -848,6 +1248,8 @@ mod tests {
             order: 0,
             sidn: [0; 3],
             slot: 0,
+            ext_night: false,
+            enclosed: false,
         }
     }
 

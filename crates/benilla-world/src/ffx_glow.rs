@@ -343,7 +343,8 @@ fn ensure_ffx_glow(
 // ---------------------------------------------------------------- render world
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
-struct FfxGlowLabel;
+// MONKEY (post): world-only HDR passes explicitly order themselves before the legacy clamp.
+pub struct FfxGlowLabel;
 
 /// The layouts, samplers, wave LUT and pipelines, built once at startup.
 #[derive(Resource)]
@@ -719,12 +720,18 @@ fn prepare_textures(
     }
 }
 
-/// `WOW_DITHER=1` arms the combine's deband dither (`ffx.lane.w`). Deviation, opt-in, off by
-/// default: the reference's 8-bit framebuffer is undithered, but a smooth gradient under slow
-/// motion steps visibly at 1/255. Bevy's own dither never runs under `Tonemapping::None`.
-fn dither_armed() -> f32 {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    match *ON.get_or_init(|| std::env::var_os("WOW_DITHER").is_some()) {
+/// MONKEY (p0 skyDither): the combine's deband dither (`ffx.lane.w`), the `skyDither` cvar
+/// (Advanced Graphics -> Sky Dithering, 0/1, default 0). Deviation, opt-in: the reference's 8-bit
+/// framebuffer is undithered, but a smooth gradient under slow motion steps visibly at 1/255.
+/// Bevy's own dither never runs under `Tonemapping::None`. benilla-app's settings bridge writes it.
+#[derive(Resource, Clone, Copy, Default, PartialEq, Eq, Debug, ExtractResource)]
+pub struct SkyDither(pub bool);
+
+/// `WOW_DITHER=1` still arms the dither for a session (it used to be the only switch); otherwise
+/// the live [`SkyDither`] decides.
+fn dither_armed(cvar: bool) -> f32 {
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    match cvar || *ENV.get_or_init(|| std::env::var_os("WOW_DITHER").is_some()) {
         true => 1.0,
         false => 0.0,
     }
@@ -755,7 +762,7 @@ fn combine_uniform(
         gain,
         feed.death,
         feed.haze,
-        dither_armed(),
+        0.0, // MONKEY (p0 skyDither): the dither arm, set by `live_combine` from [`SkyDither`]
         wave.phase1,
         wave.phase2,
         0.0,
@@ -978,6 +985,9 @@ fn live_combine(world: &World, glow: &FfxGlow) -> ([f32; 8], bool) {
         glow,
         wave,
     );
+    // MONKEY (p0 skyDither): the dither lane, from the cvar (or the old env switch).
+    let mut uniform = uniform;
+    uniform[3] = dither_armed(world.get_resource::<SkyDither>().is_some_and(|d| d.0));
     (uniform, wave_armed(glow.state, wave, player))
 }
 
@@ -1163,6 +1173,8 @@ impl Plugin for FfxGlowPlugin {
             .init_resource::<FfxHazeMix>()
             .init_resource::<FfxWave>()
             .init_resource::<FfxSwitches>()
+            // MONKEY (p0 skyDither)
+            .init_resource::<SkyDither>()
             .add_plugins((
                 ExtractComponentPlugin::<FfxGlow>::default(),
                 ExtractComponentPlugin::<FfxBackdrop>::default(),
@@ -1172,6 +1184,7 @@ impl Plugin for FfxGlowPlugin {
                 ExtractResourcePlugin::<FfxHazeMix>::default(),
                 ExtractResourcePlugin::<FfxWave>::default(),
                 ExtractResourcePlugin::<FfxSwitches>::default(),
+                ExtractResourcePlugin::<SkyDither>::default(),
             ))
             .add_systems(
                 Update,

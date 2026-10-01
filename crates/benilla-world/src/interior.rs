@@ -29,8 +29,21 @@ use benilla_assets::materials::WowModelMaterial;
 /// classify and footprint chain every tick (`0x69e280`), so the MOCV light must never step.
 const RESAMPLE_DIST_SQ: f32 = 1e-4;
 
-/// The resident WMO placements, as a change signal: a building streaming in under a standing NPC
-/// must re-light it. Rebuilt each frame by [`crate::terrain_stream`].
+/// MONKEY (portal lane fade): how fast an anchor's crossfade weight travels between the exterior
+/// lane (`0`) and the room lane (`1`), in weight-units/s. The same 2.0/s the ground-shade node
+/// ramps its intensity at ([`crate::entity_shade`]'s ambient chase, the binary's `[0x810804]`) —
+/// deliberately, because the two are the SAME transition seen from two sides: crossing a portal
+/// re-seeds the node's ambient chase at the moment it re-lanes the part, and a half-second lane
+/// blend under a quarter-second light chase (or vice versa) reads as two events, not one.
+///
+/// Surfaces already blend across a portal seam by geometry; entities had nothing, so an NPC
+/// stepping through a doorway swapped from night-dark to torch-warm in ONE frame.
+const LANE_RAMP_PER_SEC: f32 = 2.0;
+
+/// Which WMO placements are resident — a generation counter the classifier re-evaluates entities on
+/// (a building streaming in under a standing NPC must re-light it even though it didn't move).
+/// Rebuilt each frame by the streamer ([`crate::terrain_stream`]) from its live placements; the
+/// down-ray itself reads the live [`WmoPortalInstance`]s, so this only carries the change signal.
 #[derive(Resource, Default)]
 pub struct WmoResidency {
     resident: HashSet<AssetId<WmoModel>>,
@@ -38,8 +51,14 @@ pub struct WmoResidency {
 }
 
 impl WmoResidency {
-    /// Bumped whenever the resident set changes.
-    pub(crate) fn generation(&self) -> u32 {
+    /// The change counter — bumped whenever the resident set actually changes. Read by the per-unit
+    /// room claim (`wmo_portal::track_unit_interiors`), whose re-test gate is otherwise movement
+    /// alone: a building streaming in under a STANDING unit must still re-claim it.
+    ///
+    /// MONKEY (GO room claims): `pub` — a CARRIED light's room-claim set is keyed to a resident
+    /// placement, so it must be rebuilt on the same tick a building streams in or out
+    /// (`benilla_app::entities::carried_light`). Same generation, same gate, one counter.
+    pub fn generation(&self) -> u32 {
         self.generation
     }
 
@@ -168,10 +187,87 @@ pub struct InteriorAnchor {
     generation: u32,
     /// Resolved from a bake-capable part; a bake part joining a matte-resolved anchor re-resolves.
     kind_bake: bool,
+    /// MONKEY (portal lane fade): the crossfade weight this anchor's parts currently render at —
+    /// `0` fully on the exterior result, `1` fully on the room result, chasing
+    /// [`Self::lane_target`] at [`LANE_RAMP_PER_SEC`]. It lives on the ANCHOR and not per part for
+    /// the same reason the law does: a body must never split across the blend (a half-faded head
+    /// on a fully-faded torso is worse than the pop it replaces), and one `f32` per light node is
+    /// nothing beside the `Vec3` position it already keeps.
+    ///
+    /// The FIRST resolve snaps it to the target instead of ramping (see the insert site): an NPC
+    /// or GameObject that streams in already standing indoors has no "outside" to come from, and
+    /// fading it up from the exterior night result would make every indoor spawn flash dark —
+    /// which is the very artifact this ramp exists to remove, dressed as its cure.
+    lane: f32,
 }
 
 impl InteriorAnchor {
-    /// This anchor's law, for the inspect card's light readout (`crate::interact`).
+    /// Where the lane weight is heading: the room result for either indoor law, the exterior one
+    /// outside. Both indoor laws share it because the shader gives them the SAME room lighting
+    /// (`wow_model.wgsl` routes `is_interior || matte_indoor` through `interior_room_light`), so a
+    /// `Bake`↔`Matte` flicker at a doorway must not restart the blend.
+    fn lane_target(law: AppliedLaw) -> f32 {
+        match law {
+            AppliedLaw::Exterior => 0.0,
+            AppliedLaw::Matte | AppliedLaw::Bake(_) => 1.0,
+        }
+    }
+
+    /// Step the crossfade toward this anchor's STANDING law's target, answering whether it moved —
+    /// which is what puts the anchor's parts back in the write path for a frame (the walk's
+    /// `changed` disjunct). Exact at both ends: the clamp lands the weight ON the target, so the
+    /// frame after a blend finishes reports `false` and the anchor is silent again.
+    fn step_lane(&mut self, dt: f32) -> bool {
+        let target = Self::lane_target(self.law);
+        if self.lane == target {
+            return false;
+        }
+        let step = dt * LANE_RAMP_PER_SEC;
+        self.lane = match self.lane < target {
+            true => (self.lane + step).min(target),
+            false => (self.lane - step).max(target),
+        };
+        true
+    }
+
+    /// The weight as the tag's 4-bit field ([`crate::mesh_tag::LANE_MAX`] steps).
+    fn lane_bits(&self) -> u8 {
+        lane_bits(self.lane)
+    }
+
+    /// MONKEY (fire GO lights): the room this anchor's own attach ray claimed — `None` outdoors.
+    ///
+    /// Exposed so the app can hand a GameObject's/creature's CARRIED lights the same room its
+    /// meshes were classified into (`benilla_app::entities::carried_light`'s room claim). Two
+    /// things need it: the faithful gate (a torch in a culled room lights nothing —
+    /// [`crate::lighting::LightRooms`], decision 0689), and cube-shadow eligibility, since
+    /// `torch_shadow's candidate query is `With<WorldPointLight>, With<LightRooms>` and a light with no
+    /// room can never be promoted to a caster however indoors it stands.
+    pub fn room(&self) -> Option<crate::wmo_portal::WmoRoom> {
+        self.room
+    }
+
+    /// MONKEY (carried light stability): the anchor's own crossfade weight - `0` fully exterior,
+    /// `1` fully in [`Self::room`], ramping at [`LANE_RAMP_PER_SEC`] (a half-second full travel).
+    ///
+    /// Exposed because it is the ONE already-smoothed interior/exterior signal a bearer carries,
+    /// and a CARRIED light's lane must be read off it rather than off the raw per-frame law. The
+    /// law itself is known to alternate frame to frame at a threshold - `WOW_INTERIOR_LOG` from
+    /// the 2026-09-09 run shows anchor `320v2` flipping `matte`<->`bake` on ten consecutive
+    /// resolves between t 73.75 and t 74.14 - and a light that re-decided its lane on that raw
+    /// verdict would swap consumer families (the exterior `point_light_sum` <-> the interior room
+    /// lane) at the same rate, i.e. strobe. One frame of a wrong verdict moves this weight by
+    /// `dt * LANE_RAMP_PER_SEC`, so a blip can never cross the `0.5` midpoint a consumer keys on;
+    /// only a verdict that HOLDS for ~0.25 s does.
+    pub fn lane(&self) -> f32 {
+        self.lane
+    }
+
+    /// One line naming the lane this anchor's parts render under — the inspect card's light
+    /// readout (`crate::interact`). "Which lane is this object on?" was the exact question decision
+    /// 0776 was found by, and answering it took a rebuild with `WOW_INTERIOR_LOG` plus an offline
+    /// `WOW_LIGHT_AT` probe; on the card it is a hover. Reads "exterior", "interior day/night", or
+    /// "interior bake (probe N)".
     pub fn law_label(&self) -> String {
         match self.law {
             AppliedLaw::Exterior => "exterior".into(),
@@ -181,8 +277,21 @@ impl InteriorAnchor {
     }
 }
 
-/// Parts to re-author from their anchor's law, drained every run: a part joining a settled
-/// anchor, a fade latch ([`enqueue_on_fade_latch`]), the self-avatar zoom feather's release.
+/// MONKEY (portal lane fade): quantize a `0..=1` crossfade weight onto the tag's 4-bit lane field.
+/// Rounds rather than truncates, so a settled weight of exactly `1.0` reaches the saturated
+/// [`crate::mesh_tag::LANE_MAX`] — a truncating quantizer would leave every indoor entity one step
+/// short of the room lane forever.
+fn lane_bits(lane: f32) -> u8 {
+    let max = f32::from(crate::mesh_tag::LANE_MAX);
+    (lane * max).round().clamp(0.0, max) as u8
+}
+
+/// Parts whose material/tag need re-authoring from their anchor's current law — the classifier's
+/// convergence queue (0734), replacing the per-part sweep's repair duty. Fed by the
+/// [`InteriorLit`] `on_add` hook (a fresh part joining a settled anchor), the fade-latch observer
+/// ([`enqueue_on_fade_latch`] — a part re-entering the write query after a fade owned its
+/// channel), and the self-avatar zoom feather's release edge. Drained every classifier run;
+/// entries whose part is still excluded (or gone) are dropped — the next edge re-enqueues.
 #[derive(Resource, Default)]
 pub struct InteriorReauthor(pub Vec<Entity>);
 
@@ -198,6 +307,12 @@ pub struct InteriorLit {
     applied: Option<AppliedLaw>,
     /// The [`crate::mesh_tag::INTERIOR_FOG_BIT`] last written; it follows the camera, not the law.
     fogged: bool,
+    /// MONKEY (portal lane fade): the tag's lane field as last written, the third component of the
+    /// write gate. It has to be recorded separately from `applied` because two writes can name the
+    /// same EFFECTIVE law and differ only in their blend weight — which is exactly what every
+    /// frame of a portal crossing looks like — and a gate that saw only the law would write the
+    /// first step of the blend and then freeze the entity mid-fade.
+    lane: u8,
 }
 
 impl InteriorLit {
@@ -236,6 +351,7 @@ impl InteriorLit {
             exterior,
             applied: None,
             fogged: false,
+            lane: 0,
         }
     }
 
@@ -250,6 +366,7 @@ impl InteriorLit {
             exterior,
             applied: Some(AppliedLaw::Bake(0)),
             fogged: true,
+            lane: crate::mesh_tag::LANE_MAX,
         }
     }
 }
@@ -402,9 +519,21 @@ pub fn classify_entity_interior(
                 // The fog is not settled: its gate is the camera's chain, so a still unit leaves
                 // and rejoins its building's MFOG as the camera walks between rooms.
                 let fog = anchor_room_fogged(state.room, &instances);
-                if state.fog != fog {
+                // MONKEY (portal lane fade): the settled gate above is MOVEMENT, and the blend is
+                // TIME — a unit that steps through a doorway and stops dead in it (or is stopped
+                // by the server's next position update landing on the same spot) still owes the
+                // rest of its crossfade. So the lane steps here too, and a lane in motion puts the
+                // anchor's parts back through the write loop for exactly the frames it moves.
+                let lane_moved = state.step_lane(time.delta_secs());
+                if state.fog != fog || lane_moved {
                     state.fog = fog;
-                    n_written += write_anchor_parts(state.law, fog, lit_parts, &mut parts);
+                    n_written += write_anchor_parts(
+                        state.law,
+                        fog,
+                        state.lane_bits(),
+                        lit_parts,
+                        &mut parts,
+                    );
                 }
                 continue;
             }
@@ -451,19 +580,31 @@ pub fn classify_entity_interior(
         resolve_us += _r.elapsed().as_secs_f32() * 1e6;
         let fog = anchor_room_fogged(room, &instances);
         let kind_bake = bake.is_some();
-        let changed = match state.as_deref_mut() {
+        // MONKEY (portal lane fade): the law flip and the blend step are two DIFFERENT reasons to
+        // rewrite this anchor's parts, kept apart because only the first is an event — the second
+        // is the ~half-second of frames after it, and folding them into one `changed` would spam
+        // `WOW_INTERIOR_LOG` with 30 identical lines per doorway.
+        let (law_changed, lane_moved, lane) = match state.as_deref_mut() {
             Some(state) => {
-                let changed = state.law != law || state.fog != fog;
+                let law_changed = state.law != law || state.fog != fog;
                 state.law = law;
                 state.room = room;
                 state.fog = fog;
                 state.last_pos = pos;
                 state.generation = residency.generation;
                 state.kind_bake = kind_bake;
-                changed
+                // Stepped AFTER the law lands, so the blend chases the verdict resolved THIS
+                // frame — on the flip frame it moves one step off the lane it was on, never a
+                // frame of the old target.
+                let lane_moved = state.step_lane(time.delta_secs());
+                (law_changed, lane_moved, state.lane_bits())
             }
             None => {
                 // `try_insert`: the anchor may carry a same-frame despawn already queued.
+                // The first resolve SNAPS the blend to its target rather than ramping into it
+                // (see [`InteriorAnchor::lane`]): an entity that streams in already indoors has
+                // no exterior state to come from, and fading it up would flash it dark.
+                let lane = InteriorAnchor::lane_target(law);
                 commands.entity(anchor).try_insert(InteriorAnchor {
                     law,
                     room,
@@ -471,18 +612,23 @@ pub fn classify_entity_interior(
                     last_pos: pos,
                     generation: residency.generation,
                     kind_bake,
+                    lane,
                 });
-                true
+                (true, false, lane_bits(lane))
             }
         };
-        // Write parts only on a change, so a unit moving mid-room does not churn extraction.
-        if !changed {
+        // Write the parts only when the law actually changed (so re-testing a moving NPC mid-room
+        // doesn't churn the render extraction) — or while its blend is still travelling, which is
+        // a handful of parts on the few entities actually mid-portal.
+        if !law_changed && !lane_moved {
             continue;
         }
         // `WOW_INTERIOR_LOG=1` prints interior verdicts and flips out of them, with the attach and
         // the point it probed; `=all` adds the first-resolve exteriors.
         let log = std::env::var("WOW_INTERIOR_LOG").ok();
+        // `law_changed` and not the write condition: the blend's frames are not classifications.
         if log.is_some()
+            && law_changed
             && (law != AppliedLaw::Exterior || had_state || log.as_deref() == Some("all"))
         {
             // The part and emitter counts show what joined: compare the model's batch count
@@ -519,7 +665,7 @@ pub fn classify_entity_interior(
                 }
             );
         }
-        n_written += write_anchor_parts(law, fog, lit_parts, &mut parts);
+        n_written += write_anchor_parts(law, fog, lane, lit_parts, &mut parts);
     }
     // Drain the queue past each part's change gate: a transient writer (a fade, the zoom
     // feather) may have overwritten its material or tag while `applied` stayed current.
@@ -542,9 +688,13 @@ pub fn classify_entity_interior(
         if matches!(lit.kind, InteriorKind::Bake { .. }) && !state.kind_bake {
             commands.entity(edge.0).try_remove::<InteriorAnchor>();
         }
+        // MONKEY (portal lane fade): the anchor's CURRENT blend weight, so a part that converges
+        // mid-crossing lands on exactly what the walk wrote its siblings this frame — a fresh
+        // gear part authored at the settled weight would pop while the body it hangs off faded.
         n_written += usize::from(write_part_law(
             state.law,
             state.fog,
+            state.lane_bits(),
             &mut lit,
             &mut material,
             &mut tag,
@@ -600,6 +750,7 @@ type PartWrite<'w, 's> = Query<
 fn write_anchor_parts(
     law: AppliedLaw,
     fog: bool,
+    lane: u8,
     lit_parts: Option<&LitParts>,
     parts: &mut PartWrite,
 ) -> usize {
@@ -610,6 +761,7 @@ fn write_anchor_parts(
             written += usize::from(write_part_law(
                 law,
                 fog,
+                lane,
                 &mut lit,
                 &mut material,
                 &mut tag,
@@ -621,27 +773,58 @@ fn write_anchor_parts(
     written
 }
 
-/// Writes one part's material and tag for `law`, gated on its record unless `force`d (a transient
-/// writer overwrote the channel); returns whether it wrote. Material and tag must always name the
-/// same law, mid-fade too, or the shader reads a Bake tag's probe slot (bits 6..=18) as a shade
-/// byte. Other laws reset to the exterior payload, whose shade byte `entity_shade` re-asserts
-/// after this; the alpha and rig fields carry through. `fog` needs both the unit's interior class
-/// (`[node+0xc]&2`) and its room on the camera's `[0xca7f00]` chain (`[P+0x98]`); `fade` picks the
-/// law's blend twin by the ramp's own rule ([`crate::model_fade::FadeMaterials::material_for`]).
+/// Write one part's material + tag for `law` — the single place a part's channel is authored.
+/// Change-gated on the part's last-written record unless `force` (a transient author — the zoom
+/// feather — overwrote the channel while `applied` stayed current). Returns whether it wrote.
+///
+/// The tag: the Bake law's payload carries the probe SLOT in its bits-6..=18 field; the other laws
+/// reset to the plain exterior payload (shade byte 0 — `entity_shade` runs after the classifier and
+/// re-asserts the ramped intensity byte the same frame; it skips only Bake parts). Both writes
+/// carry the tag's **alpha** field through, so a law change lands cleanly mid-fade. Every arm
+/// carries the part's rig field through (decision 0720): a skinned part keeps its palette across
+/// the indoor/outdoor transition.
+///
+/// `fog` is the INTERIOR_FOG_BIT, decided by the CALLER and orthogonal to the law: the reference
+/// fogs a unit by its own interior classification **and** by whether the room it attached to is on
+/// the camera's `[0xca7f00]` chain this frame — `[node+0xc]&2` is necessary, `[P+0x98] != 0` is the
+/// other half (decision 1792 §4). An exterior-law part is never fogged, which the caller asserts by
+/// passing `false`; that is the only coupling left between the two.
+///
+/// `fade` is `Some` only while an appear/despawn ramp owns the part (live **or** pending), and it
+/// selects the law's BLEND twin instead of its steady material (decision 0755). It is the same
+/// [`crate::model_fade::FadeMaterials::material_for`] rule the ramp itself applies every frame, so
+/// the two writers produce the identical handle and can never fight, in either order.
+///
+/// Writing the material here rather than leaving it entirely to the ramp is what keeps the
+/// **material mode and the tag payload mode naming the same law at every instant** — the invariant
+/// `mesh_tag::describe` exists to catch a violation of (0355 broke exactly this way). Skipping it
+/// would leave a part that classifies indoors while still *pending* carrying a probe slot on the
+/// exterior material, where the shader decodes those bits as a ground-shade byte.
+///
+/// `lane` is the anchor's crossfade weight as tag bits (MONKEY, portal lane fade) and it is the
+/// reason this function has an EFFECTIVE law distinct from its argument — see [`effective_law`].
 fn write_part_law(
     law: AppliedLaw,
     fog: bool,
+    lane: u8,
     lit: &mut InteriorLit,
     material: &mut MeshMaterial3d<WowModelMaterial>,
     tag: &mut MeshTag,
     force: bool,
     fade: Option<&crate::model_fade::FadeMaterials>,
 ) -> bool {
-    if lit.applied == Some(law) && lit.fogged == fog && !force {
+    let law = effective_law(law, lane);
+    // The gate is the full triple (law, fog, lane): two consecutive frames of a crossing name the
+    // same effective law and differ only in the weight, so a law+fog gate would write the blend's
+    // first step and freeze there. Exactly-gated in the other direction too — the weight reaches
+    // its target exactly (`InteriorAnchor::step_lane` clamps onto it), so a settled part still
+    // costs zero writes however long it stands there.
+    if lit.applied == Some(law) && lit.fogged == fog && lit.lane == lane && !force {
         return false;
     }
     lit.applied = Some(law);
     lit.fogged = fog;
+    lit.lane = lane;
     let want = match fade {
         Some(fm) => fm.material_for(Some(&*lit), true).clone(),
         None => lit.steady_material().clone(),
@@ -651,14 +834,58 @@ fn write_part_law(
     }
     let payload = match law {
         AppliedLaw::Bake(slot) => crate::mesh_tag::with_interior_probe(tag.0, slot),
-        AppliedLaw::Matte | AppliedLaw::Exterior => crate::mesh_tag::with_exterior_reset(tag.0),
+        // MONKEY (torch shadows Phase 3A): the Matte law keeps the exterior material but flags
+        // the part INDOORS, so the shader's dynamic-interior lane holds across a Bake↔Matte
+        // flicker (the down-ray marginally hitting the baked floor at one spot). Since the portal
+        // lane fade it also carries the blend WEIGHT the shader mixes the two lanes by.
+        AppliedLaw::Matte => crate::mesh_tag::with_matte_indoor(tag.0, lane),
+        AppliedLaw::Exterior => crate::mesh_tag::with_exterior_reset(tag.0),
     };
     tag.0 = crate::mesh_tag::with_interior_fog(payload, fog);
     true
 }
 
-/// Whether this anchor's room is on the camera's interior-fog chain this frame (`[P+0x98]`). It
-/// fails closed at every seam, as `fogs_group` does: a miss must not paint a building's MFOG.
+/// MONKEY (portal lane fade): the law a part is actually AUTHORED under, given its anchor's
+/// standing law and the blend weight that law is being reached at.
+///
+/// **The blend only ever exists in exterior material mode.** The exterior half of the crossfade is
+/// the day/night result the exterior material computes, so both halves have to be available in one
+/// fragment — and `Bake` is a different MATERIAL (interior mode, the probe-slot payload), which
+/// cannot produce an exterior day/night result to fade from. So a part heading for `Bake` is
+/// written as `Matte` — the exterior material, flagged indoors, at the current weight — for the
+/// whole of the ramp, and commits the interior material and its probe slot only on the frame the
+/// weight saturates. There is no visual seam at the commit: the shader routes `is_interior` and
+/// the matte-indoor flag through the *same* `interior_room_light`, so the two agree at weight 1.
+///
+/// The mirror case is leaving: the standing law is already `Exterior` while the weight is still
+/// unwinding, and until it reaches zero the part must keep the flag (and the exterior material it
+/// already has) so the shader still has a room lane to fade OUT of. At zero it becomes the plain
+/// exterior reset, which is what clears the flag and the field together.
+///
+/// The probe-slot lifecycle (`seat_probe_slot`/`BakeState`/`ParticleLight`) deliberately does NOT
+/// wait on this: it turns over at the law flip, so a slot is seated (and the SH fold running)
+/// slightly before the part starts reading it, and released slightly after it stops. That is the
+/// harmless order — the alternative, a part on the interior material naming a slot the anchor has
+/// already released, is the stuck-black-unit bug (0734).
+fn effective_law(law: AppliedLaw, lane: u8) -> AppliedLaw {
+    match law {
+        // Mid-ramp toward the room: hold the exterior material and blend on the tag.
+        AppliedLaw::Bake(_) if lane < crate::mesh_tag::LANE_MAX => AppliedLaw::Matte,
+        // Mid-ramp back out: the verdict is outdoors, the blend is not there yet.
+        AppliedLaw::Exterior if lane > 0 => AppliedLaw::Matte,
+        settled => settled,
+    }
+}
+
+/// **Is this anchor's room on the camera's interior-fog chain this frame?** — the `[P+0x98]` half
+/// of a unit's fog lane (decision 1792 §4), resolved through the same chain the room-visibility
+/// leg walks: anchor record → placement instance → the flood's per-group gate.
+///
+/// Fails CLOSED at every seam (no room, despawned placement, a group past the set), which is
+/// [`crate::wmo_portal::WmoPortalInstance::fogs_group`]'s own convention: the scene fog is what
+/// every un-gated draw already wears, and a lookup miss must not paint a building's MFOG onto
+/// something the flood never placed in it. An exterior-law anchor holds no room, so it answers
+/// `false` without a lookup.
 fn anchor_room_fogged(
     room: Option<crate::wmo_portal::WmoRoom>,
     instances: &Query<(Entity, &WmoPortalInstance)>,
@@ -894,6 +1121,10 @@ mod tests {
                     last_pos: Vec3::ZERO, // matches the transform: settled, no movement
                     generation,
                     kind_bake: true,
+                    // MONKEY (portal lane fade): a SETTLED anchor — the blend already sits on its
+                    // law's target, so `step_lane` is a no-op and the walk reads exactly as it did
+                    // before the crossfade existed. Every fixture below is settled the same way.
+                    lane: 1.0,
                 },
             ))
             .id();
@@ -1000,6 +1231,7 @@ mod tests {
                     last_pos: Vec3::ZERO,
                     generation,
                     kind_bake: false,
+                    lane: 1.0,
                 },
             ))
             .id();
@@ -1042,6 +1274,7 @@ mod tests {
                     last_pos: Vec3::ZERO, // settled: the walk never re-rays this anchor
                     generation,
                     kind_bake: false,
+                    lane: 1.0,
                 },
             ))
             .id();
@@ -1104,6 +1337,7 @@ mod tests {
                     last_pos: Vec3::ZERO,
                     generation,
                     kind_bake: true,
+                    lane: 1.0,
                 },
             ))
             .id();
@@ -1172,6 +1406,7 @@ mod tests {
                     last_pos: Vec3::ZERO,
                     generation,
                     kind_bake: false,
+                    lane: 0.0,
                 },
             ))
             .id();
@@ -1253,6 +1488,7 @@ mod tests {
                     last_pos: Vec3::ZERO, // settled: no ray, the drain does the work
                     generation,
                     kind_bake: true,
+                    lane: 1.0,
                 },
             ))
             .id();

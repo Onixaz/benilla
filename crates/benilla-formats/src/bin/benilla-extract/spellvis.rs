@@ -86,8 +86,36 @@ pub fn run(chain: &mut Chain, spell_id: u32) -> Result<()> {
             }
         }
     }
-    // A missile exists whenever `Speed > 0`: its model is field 7's `SpellVisualEffectName`, else
-    // the ammo or ErrorCube fallback, and it homes on a live target's field-9 dest-attach ordinal.
+    // The AREA block (fields 11/12/13 — the DynamicObject machine, decision 0797): visual A is
+    // the persistent area model the dynobj instances verbatim (gated on field 11 ≠ 0), and the
+    // area kit's type-9 CharProc is the shard emitter. Printed because "what does Flamestrike
+    // actually put on the ground" is unanswerable from the five unit stages above — those are the
+    // CASTER's kit, and a ground effect's own model hangs off this row instead.
+    println!(
+        "  area     gate={} effect {:<5} -> {}   kit {}",
+        stages.area_gate,
+        stages.area_effect,
+        visuals
+            .effect_path(stages.area_effect)
+            .unwrap_or("(none/MISSING PATH)"),
+        stages.area_kit,
+    );
+    if stages.area_kit != 0 {
+        match visuals.kit(stages.area_kit) {
+            Some(kit) => {
+                println!(
+                    "           areakit anim={:<12} sound={}",
+                    kit.anim_id.map_or("—".into(), |a| a.to_string()),
+                    kit.sound.map_or("—".into(), |s| s.to_string()),
+                );
+                crate::charprocs::print_kit_procs(&visuals, stages.area_kit, "           ");
+            }
+            None => println!("           areakit {} (MISSING ROW)", stages.area_kit),
+        }
+    }
+    // The missile block (phase 4): the projectile exists whenever Speed > 0; its model is
+    // field 7's SpellVisualEffectName (else the ammo/ErrorCube fallbacks) and it homes to
+    // field 9's dest-attach ordinal on a live target.
     if spell.speed > 0.0 {
         let tag = benilla_formats::MISSILE_ATTACH_TABLE
             .get(stages.missile_attach as usize)

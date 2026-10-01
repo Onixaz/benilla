@@ -22,6 +22,19 @@ mod cull;
 mod pick;
 mod pool;
 mod render;
+mod shadow; // MONKEY (world shadows): CPU triangle collection for the static-world shadow caster
+mod torch_depth; // MONKEY (torch shadows Phase 1): the per-fixture depth-map render + its targets
+pub use shadow::CutoutBucket; // MONKEY (world shadows): per-leaf-texture alpha-cutout caster group
+pub use torch_depth::TorchShadowViews; // MONKEY (torch shadows Phase 1): the app→render publication
+                                       // MONKEY (torch owner exclusion): the light→caster ownership key, written at the light spawn
+                                       // sites (`terrain_stream::spawn`, `benilla_app::entities::carried_light`) and read by both
+                                       // torch caster gathers, so a fixture never casts its own body's shadow into its own map.
+pub use torch_depth::{torch_flame_inside_bounds, LightOwner};
+// MONKEY (torch shadows Phase 3A): the shared depth image + table buffer every model material binds,
+// their startup constructor, the one-param main-world accessor, and the always-on wiring — used by
+// the asset foundation (`crate::assets`) and every material-building site; NOT gated on `enabled()`.
+pub(crate) use torch_depth::register_shared as register_torch_shared;
+pub use torch_depth::{new_torch_shared, SharedTorchBuffer, TorchDepthImage, TorchShared};
 
 /// The doodad spatial cell, a quarter ADT tile (133⅓ yd), as `terrain_stream::merge::CELL`.
 const CELL: f32 = 533.333_3 / 4.0;
@@ -61,6 +74,8 @@ const WORD_HAS_VC: u32 = 1 << 27;
 // `ShadeSel::Matte`, fixed 1.0: a map doodad never reaches the 2.5 site (`0x69e4ad`). Not
 // `WORD_SHADE_LIT`, so lifting the shader's `min(I, 1)` cap leaves this at 1.0.
 const WORD_MATTE: u32 = 1 << 28;
+// MONKEY (wind): classified alpha-tested tree/bush foliage; bits 30-31 remain free.
+const WORD_FOLIAGE_WIND: u32 = 1 << 29;
 // An interior M2 prop is WORD_INTERIOR with WORD_WMO clear, the entity shader's `interior_prop =
 // flags.z && !flags.x`: SH-probe light from its record slot, interior fog, no live point lights.
 
@@ -139,8 +154,12 @@ struct GxItem {
     /// The owner tile, read only by [`StaticGx::release_owner`]; regions follow their instance.
     owner: (i32, i32),
     texture: Option<AssetId<bevy::image::Image>>,
-    /// Keeps the render world's `GpuImage` alive under the baked cell; the id alone holds nothing.
-    _texture_handle: Option<Handle<bevy::image::Image>>,
+    /// Kept as a live handle so the render world's `GpuImage` can never be dropped from under
+    /// the baked cell (the id alone holds nothing). Never READ (the bake keys everything off
+    /// [`Self::texture`]'s id) — its whole job is the strong reference held by its own
+    /// existence, so `dead_code` is a false positive here.
+    #[allow(dead_code)]
+    texture_handle: Option<Handle<bevy::image::Image>>,
     cutout: bool,
     two_sided: bool,
     unlit: bool,
@@ -154,6 +173,8 @@ struct GxItem {
     prop: Option<GxItemProp>,
     /// `Some(uid)` on a fader item: the placement it exiles with.
     fader: Option<u32>,
+    /// MONKEY (wind): an alpha-tested leaf-card batch of a static tree/bush model.
+    foliage_wind: bool,
 }
 
 /// A WMO-prop item's referrer set (an index into [`GxCell::sets`]) and folded SH-probe slot;
@@ -209,7 +230,16 @@ enum FaderState {
 struct GxItemWmo {
     group: u16,
     interior: bool,
-    /// The batch-class lane as `model_render` packs `tint.w`: 0 EXT, 1 INT, 2 TRANS.
+    /// MONKEY (ext-class night law): this batch's group is EXTERIOR-class at BUILDING scale
+    /// ([`benilla_formats::room_claim::ext_building_scale`]) — the record table's bit 27, which
+    /// makes `static_gx.wgsl` blend it onto the interior light law after dark.
+    ext_night: bool,
+    /// MONKEY (enclosed day floor): this batch's group is an INTERIOR room inside a building-scale
+    /// shell ([`benilla_formats::room_claim::enclosed_by_building_shell`]) — the record table's
+    /// bit 28, which gives the room law a sun-driven ambient floor by day.
+    enclosed: bool,
+    /// The batch-class lane exactly as `model_render` packs `tint.w`: 0 = EXT law, 1 = INT,
+    /// 2 = TRANS — non-zero only on an interior group's batches.
     class_lane: u8,
     sidn: [u8; 3],
     window: bool,
@@ -321,10 +351,22 @@ pub struct GxFadeSeed {
 pub enum GxSite<'a> {
     /// A world-static ADT doodad placement: cell items.
     Doodad { owner: (i32, i32) },
-    /// A WMO placement's group geometry, with the per-batch group map (`WmoModel::submesh_group`).
-    Wmo { instance: Entity, groups: &'a [u16] },
-    /// A WMO doodad prop: the building's instance entity, the rooms that name the prop and its
-    /// SH-probe slot. A placement without an instance has no PVS key and is declined.
+    /// A WMO placement's group geometry: the pre-spawned `WmoPortalInstance` entity + the
+    /// model's per-batch group map (`WmoModel::submesh_group`, index-parallel with batches).
+    /// MONKEY (ext-class night law): `bounds` is the model's MOGI group table (`group_bounds`),
+    /// indexed by ABSOLUTE group index — the class + box the per-batch night-law bit is read off.
+    Wmo {
+        instance: Entity,
+        groups: &'a [u16],
+        bounds: &'a [benilla_formats::WmoGroupInfo],
+        /// MONKEY (daylight: district sky rooms): per ABSOLUTE group, a city room connected to
+        /// the sky by the portal graph (`lighting::district_sky_rooms`); empty for a building.
+        sky: &'a [bool],
+    },
+    /// A WMO doodad prop (B4, decision 1433 — 1418's lane 3, absorbed): the building's
+    /// instance entity, the referrer set of rooms that name the prop, and the interior
+    /// prop's folded SH-probe slot. Only a placement WITH an instance qualifies (no
+    /// instance ⇒ no PVS identity ⇒ the merge/entity path, tallied).
     Prop {
         instance: Entity,
         groups: &'a Arc<[u16]>,
@@ -340,7 +382,16 @@ pub struct GxWmoBatch {
     pub group: u16,
     /// The group is a true interior (`MOGI & 0x48 == 0`).
     pub interior: bool,
-    /// The MOBA batch class (INT, TRANS, EXT), the lighting lane on interior groups.
+    /// MONKEY (ext-class night law): EXTERIOR-class, but at BUILDING scale — an inn's shell or its
+    /// basement stairwell, not a city district's. Resolved at the spawn site from the group's own
+    /// MOGI box ([`benilla_formats::room_claim::ext_building_scale`]), because that is the last
+    /// place the model's group table is in hand; it rides to the shader as a record bit.
+    pub ext_night: bool,
+    /// MONKEY (enclosed day floor): the mirror question — this is an INTERIOR-class group whose
+    /// box centre sits inside such a shell, i.e. a ROOM IN A BUILDING rather than a cave. Resolved
+    /// at the same site off the same table; rides to the shader as bit 28.
+    pub enclosed: bool,
+    /// The MOBA batch class (INT/TRANS/EXT) — the lighting-lane selector on interior groups.
     pub class: Option<WmoBatchClass>,
     /// The MOMT SIDN night-glow colour.
     pub sidn: Option<[u8; 3]>,
@@ -432,10 +483,16 @@ impl StaticGx {
                 return false;
             }
         };
+        let foliage_wind = foliage_wind_batch(&b.object.label, b.blend, b.wmo.is_some());
+        if foliage_wind {
+            log_foliage_classification(&b.object.label);
+        }
         let wmo_key = b.wmo.as_ref().map(|w| w.instance);
         let wmo = b.wmo.map(|w| GxItemWmo {
             group: w.group,
             interior: w.interior,
+            ext_night: w.ext_night,
+            enclosed: w.enclosed,
             class_lane: match (w.interior, w.class) {
                 (true, Some(WmoBatchClass::Int)) => 1,
                 (true, Some(WmoBatchClass::Trans)) => 2,
@@ -531,7 +588,7 @@ impl StaticGx {
             local_aabb: b.aabb,
             owner: b.owner,
             texture: b.texture.as_ref().map(Handle::id),
-            _texture_handle: b.texture,
+            texture_handle: b.texture,
             cutout: b.blend == ModelBlend::AlphaTest && !crate::model_render::alphatest_disabled(),
             two_sided: b.two_sided,
             unlit: b.unlit,
@@ -543,6 +600,7 @@ impl StaticGx {
             wmo,
             prop,
             fader: fader_uid,
+            foliage_wind,
         });
         if !entry.dirty {
             entry.dirty_since = self.frame;
@@ -637,6 +695,44 @@ impl StaticGx {
         self.declined_changed = 0;
         self.declined_printed = 0;
         self.accepted = 0;
+    }
+}
+
+/// MONKEY (wind): conservative leaf classification. Alpha test excludes trunks/rocks even when a
+/// whole model path says tree; the name terms cover vanilla's tree/bush/plant families. Animated
+/// doodads never reach this function because `assemble.rs` excludes them before `StaticGx::divert`.
+pub(crate) fn foliage_wind_batch(path: &str, blend: ModelBlend, wmo_geometry: bool) -> bool {
+    if wmo_geometry || blend != ModelBlend::AlphaTest {
+        return false;
+    }
+    let p = path.to_ascii_lowercase();
+    // Substrings alone otherwise catch StreetLamp, tree huts, dead stumps/logs and painted tree
+    // facades. Those can carry alpha-tested cards, but moving the whole card is not foliage sway.
+    if ["street", "treehut", "stump", "log", "facade", "fallen"]
+        .iter()
+        .any(|term| p.contains(term))
+    {
+        return false;
+    }
+    [
+        "tree", "bush", "shrub", "foliage", "fern", "palm", "plant", "willow", "canopy", "hedge",
+        "thorn", "cactus", "vine", "reed", "kelp",
+    ]
+    .iter()
+    .any(|term| p.contains(term))
+}
+
+/// Log each classified model once so false positives can be audited from an ordinary scene load.
+fn log_foliage_classification(path: &str) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let mut seen = SEEN
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if seen.insert(path.to_string()) {
+        info!("MONKEY wind: classified foliage leaf batches for {path}");
     }
 }
 
@@ -781,6 +877,45 @@ mod tests {
         );
         assert!(gx.divert(batch(&g, Vec3::ZERO, None, ModelBlend::Opaque)));
         assert_eq!(gx.cells.len(), 1);
+    }
+
+    #[test]
+    fn foliage_classifier_requires_a_leaf_batch_and_a_plant_name() {
+        assert!(foliage_wind_batch(
+            "World\\Azeroth\\Elwynn\\PassiveDoodads\\Trees\\ElwynnTree01.m2",
+            ModelBlend::AlphaTest,
+            false,
+        ));
+        assert!(foliage_wind_batch(
+            "World\\Generic\\PassiveDoodads\\Bush\\Bush01.mdx",
+            ModelBlend::AlphaTest,
+            false,
+        ));
+        assert!(!foliage_wind_batch(
+            "World\\Azeroth\\Elwynn\\PassiveDoodads\\Trees\\ElwynnTree01.m2",
+            ModelBlend::Opaque,
+            false,
+        ));
+        assert!(!foliage_wind_batch(
+            "World\\Stormwind\\StreetLamp01.m2",
+            ModelBlend::AlphaTest,
+            false,
+        ));
+        assert!(!foliage_wind_batch(
+            "World\\Azeroth\\SwampOfSorrow\\PassiveDoodads\\TreeHuts\\LostTreeHuts03.m2",
+            ModelBlend::AlphaTest,
+            false,
+        ));
+        assert!(!foliage_wind_batch(
+            "World\\Azeroth\\Elwynn\\PassiveDoodads\\Tree\\ElwynnLog02.m2",
+            ModelBlend::AlphaTest,
+            false,
+        ));
+        assert!(!foliage_wind_batch(
+            "World\\Wmo\\TreeHouse.wmo",
+            ModelBlend::AlphaTest,
+            true,
+        ));
     }
 
     #[test]

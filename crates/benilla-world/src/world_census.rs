@@ -244,8 +244,9 @@ impl WorldCensus<'_, '_> {
         };
 
         let sky = self.skybox.as_ref().map(|s| {
-            s.0.as_deref()
-                .map_or_else(|| "dome".to_string(), str::to_ascii_lowercase)
+            // MONKEY (skybox): the heaviest layer of the weighted list.
+            s.primary()
+                .map_or_else(|| "dome".to_string(), |l| l.path.to_ascii_lowercase())
         });
 
         CensusReport {

@@ -485,6 +485,395 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // [`crate::video::VideoConfig::vsync`], which the window's present mode follows at the
     // `RestartGx` commit. `$WOW_NOVSYNC=1` overrides it for the session.
     same("gxVSync", "1").latched(),
+    // MONKEY (advanced graphics): the one row on the Advanced Graphics page that is not a knob —
+    // it is a NAME for a combination of the rows under it ([`LIGHTING_PRESETS`]). Writing a preset
+    // name writes that preset's members; writing anything else is corrected on the next frame by
+    // [`lighting_quality`], which re-DERIVES the name from the members those rows actually hold.
+    // So the stored value is never stale: it is either a preset every member agrees with, or
+    // `Custom`.
+    //
+    // A STRING row, not an int, so `config.toml` and `/console set lightingQuality Medium` both
+    // read as what they mean — and so the ladder can gain a rung without renumbering a player's
+    // saved value. `Row::numeric` is false for it (the default does not parse as a number), which
+    // is what lets the registry accept a non-numeric write at all; `realmList` is the precedent.
+    ours(
+        "lightingQuality",
+        "High",
+        "benilla's own: the preset ladder over the dynamic light + shadow rows — Off / Low / \
+         Medium / High / Ultra, or Custom when the members match none of them; the reference has no \
+         realtime light or shadow system to preset",
+    ),
+    // MONKEY (presets): the Graphics Preset — `lightingQuality`'s posture one level up, a NAME
+    // for every graphics row at once ([`GRAPHICS_PRESETS`]), re-derived every frame. "High" is
+    // what a player with no saved preset boots into: [`Cvars::seed_graphics_preset`] writes the
+    // High column over every row their `config.toml` does not carry, so the rows themselves keep
+    // their per-lane defaults (Classic-leaning, and `farclip` the reference's 350) and a capture
+    // or a test, which never seeds, keeps them too.
+    ours(
+        "graphicsQuality",
+        "High",
+        "benilla's own: the preset ladder over every graphics row — Classic / Low / Medium / High \
+         / Ultra, or Custom when the rows match none of them; the reference's options have no \
+         such preset",
+    ),
+    // MONKEY (volumetric fog): saved live tier; capture override stays session-only.
+    ours("volumetricFog", "1", "benilla's own: near-field volumetric fog, 0 Off / 1 Low / 2 High"),
+    // MONKEY (lampfog): opt-in point-light halos; High graphics preset value is 2.
+    ours(
+        "lampFog",
+        "0",
+        "benilla's own: lamps scattering through night fog, 0 Off / 1 Low (16 lamps) / 2 High (32 lamps)",
+    ),
+    // GFX (volumetric light): shadow-mapped light shafts for the sun and the moon.
+    ours(
+        "volumetricLight",
+        "0",
+        "benilla's own: sun and moon light shafts marched through the shadow map, 0 Off / 1 Medium / 2 High",
+    ),
+    ours(
+        "volumetricLightStrength",
+        "1",
+        "benilla's own: brightness of the volumetric light shafts, 0..2 (1 = default)",
+    ),
+    // GFX (moonlight): the moon as a light on top of the stock night.
+    ours(
+        "moonLight",
+        "0",
+        "benilla's own: moonlight on top of the stock night, 0..2 (0 = the reference night)",
+    ),
+    // MONKEY (p0 skyDither): the FFXGlow combine's deband dither (was env WOW_DITHER only).
+    // Default 0 = the reference look; the Graphics preset's High sets 1.
+    ours(
+        "skyDither",
+        "0",
+        "benilla's own: faint screen dither against sky and fog banding, 0 Off / 1 On",
+    ),
+    // MONKEY (post): tier 0 leaves every emissive site and the frame byte-identical.
+    ours("bloom", "2", "benilla's own: HDR emissive bloom, 0 Off / 1 Low / 2 High"),
+    ours("sunShafts", "1", "benilla's own: depth-occluded screen-space sun shafts"),
+    ours("colorGrading", "1", "benilla's own: zone and day/night 32-cube colour grade"),
+    // MONKEY (sky): the sky tier; the High graphics preset sets 2.
+    ours(
+        "skyQuality",
+        "0",
+        "benilla's own: sky quality, 0 Classic / 1 Enhanced (smooth gradient, sun glow, stars) / \
+         2 High (+ detailed sun-lit clouds)",
+    ),
+    // MONKEY (wind): one tier controls the grass-only and grass-plus-tree receivers.
+    ours(
+        "foliageWind",
+        "2",
+        "benilla's own: foliage wind, 0 Off / 1 Grass / 2 Grass + trees",
+    ),
+    // MONKEY (fix-wind): the sway strength slider under Foliage Wind; not on the preset ladder.
+    ours(
+        "foliageWindStrength",
+        "1",
+        "benilla's own: foliage wind strength, a gain on the sway, 0.25..3 (1 = the shipped tuning)",
+    ),
+    // MONKEY (fog): the distance-fog model. 0 = the 1.12 linear fog (byte-identical), 1 = Modern
+    // (exponential, sun/horizon colour, end-fog shift, fog end decoupled from farclip past 777).
+    // Default 0; the Graphics preset's High sets 1.
+    ours(
+        "fogModel",
+        "0",
+        "benilla's own: distance fog, 0 Classic (1.12 linear) / 1 Modern (soft, sun-coloured horizon)",
+    ),
+    // MONKEY (wet): rain darkens and glosses sky-exposed surfaces and rings the water. Default 1
+    // (only visible while it rains or the ground dries); the Graphics preset's High sets 1.
+    ours(
+        "rainSurfaces",
+        "1",
+        "benilla's own: rain wets sky-exposed surfaces and rings the water, 0 Off / 1 On",
+    ),
+    // MONKEY (ao): opt-in contact shadows; the High graphics preset value is 2.
+    ours("ambientOcclusion", "0", "benilla's own: screen-space ambient occlusion, 0 Off / 1 Low / 2 High"),
+    // MONKEY (skybox): the living player's zone skybox from `LightParams`; High sets 1.
+    ours(
+        "zoneSkyboxes",
+        "0",
+        "benilla's own: draw the zone skybox LightParams names for the living, 0 Off / 1 On; the \
+         reference draws a DBC skybox only for the ghost",
+    ),
+    ours(
+        "waterQuality",
+        "1",
+        "benilla's own: water quality, 0 Classic / 1 Enhanced / 2 High; mirror reflections are opt-in",
+    ),
+    ours(
+        "lavaLightGain",
+        "1",
+        "benilla's own: brightness of lava lighting its surroundings, 0..4 (0 = no glow)",
+    ),
+    // Benilla's opt-in realtime shadow-map path, split into two INDEPENDENT lanes over one shared
+    // shadow rig (one sun / one map). `worldShadows` = the static world (trees, buildings, foliage)
+    // casts realtime shadows and baked MCSH terrain shadows switch off; `characterShadows` =
+    // players/NPCs/creatures/mounts cast realtime silhouettes instead of the legacy oval blob.
+    //
+    // `ours(...)`, not `same(...)`: the reference has no realtime shadow at all — it bakes MCSH
+    // into the terrain and draws an oval under every unit — so there is no registered default for
+    // these two to agree with, and claiming `Same` would put a false entry in the one column
+    // [`Reference`] exists to keep honest. (They read `same("…", "1")` until the 2303 registry
+    // port; the default string is unchanged.)
+    ours(
+        "worldShadows",
+        "1",
+        "benilla's own: the static world (trees, buildings, alpha-tested foliage) casts a realtime \
+         shadow and the baked MCSH terrain shadows stand aside; the reference bakes and has no \
+         such switch",
+    ),
+    ours(
+        "characterShadows",
+        "1",
+        "benilla's own: units cast a realtime silhouette instead of the reference's oval blob \
+         decal, which is all 1.12 has and is therefore not a setting there",
+    ),
+    // Realtime-shadow render distance in yards (the shadow-map cascade range + caster reach).
+    // benilla's own — the reference has no realtime shadow to size. Clamped to SHADOW_DISTANCE_RANGE.
+    ours(
+        "shadowDistance",
+        "80",
+        "1900: benilla's own realtime-shadow render-distance slider; the reference bakes MCSH and \
+         has no cascade to size",
+    ),
+    // MONKEY (sun shadow perf): the five live dials over the sun lanes' ~5 ms/frame (RTX 3070,
+    // 1080p, both lanes on: 45-47 fps, and 68-73 with both off). All benilla's own — the reference
+    // bakes MCSH and has no realtime shadow to tune. `shadow_core`'s constants block holds the cost
+    // split each one takes; every row is LIVE, so the whole set A/Bs from one chat line.
+    ours(
+        "shadowMapSize",
+        "2048",
+        "benilla's own: directional shadow-map edge in texels, 1024/2048/4096 (cost is quadratic)",
+    ),
+    ours(
+        "shadowFilter",
+        "1",
+        "benilla's own: shadow PCF kernel: 0 hardware-2x2 (1 sample), 1 gaussian (9, the look)",
+    ),
+    ours(
+        "characterShadowRate",
+        "30",
+        "benilla's own: Hz cap on the character shadow proxy re-skin+upload, 0..120 (0 = per frame)",
+    ),
+    ours(
+        "worldShadowRate",
+        "30",
+        "benilla's own: Hz cap on the world lane's environment caster, 0..120 (0 = per frame)",
+    ),
+    ours(
+        "shadowCasterReach",
+        "1",
+        "benilla's own: multiplier on the shadow caster-collection reach, 0.25..2 (1 = unchanged)",
+    ),
+    // MONKEY (moon shadows): how dark a MOON-shadowed fragment is allowed to get at night — the
+    // dial over the night lane's own shadow term (`benilla_world::lighting::MoonShadowStrength`,
+    // bridged by `dynamic_interior` beside the spell gain). `0` is the FAITHFUL null: every
+    // consumer guards on it, so a night at 0 renders as the build before the feature did — which
+    // is also what the Off and Low presets ask for.
+    ours(
+        "moonShadowStrength",
+        "0.35",
+        "benilla's own: how dark a moon-shadowed fragment gets at night, 0..1 (0 = no moon \
+         shadow, the reference's own night)",
+    ),
+    // MONKEY (dynamic interiors): WMO interiors + their props light from the room's LIVE fixtures
+    // instead of the MOCV bake / the baked prop probe (`static_gx.wgsl` `interior_room_light`;
+    // bridged by `dynamic_interior`). The three numeric knobs are live-tunable from chat —
+    // `/script SetCVar("interiorExposure", 2)` — which is how their defaults were found.
+    ours(
+        "interiorLight",
+        "1",
+        "benilla's own: fixture-lit WMO interiors (0 = the reference's baked interior path)",
+    ),
+    ours(
+        "interiorAmbient",
+        "0.015",
+        "benilla's own: interior base ambient, 0..1",
+    ),
+    ours(
+        "interiorFill",
+        "0.08",
+        "benilla's own: interior per-fixture bounce gain, 0..2",
+    ),
+    ours(
+        "interiorExposure",
+        "2.5",
+        "benilla's own: interior light-budget multiplier before the soft rolloff, 0.25..8",
+    ),
+    // MONKEY (soft falloff): the live scale on every interior fixture's AUTHORED attenuation
+    // window (WMO MOLT `+0x28/+0x2c`; M2 sources bucket by intensity instead — their authored pair
+    // is a template default, not a reach). A fixture's EFFECTIVE RADIUS is `authored end × this`.
+    // The artists' own ends — Goldshire inn 6.97-9.53 yd over 10 fixtures, its blacksmith 6.0,
+    // NSabbey 4.17-5.56, Stormwind's 606 median 6.94 — are where FULL brightness ends, not where
+    // light stops, so `1` drew a hard-edged disc at exactly that radius with black beyond it (the
+    // abbey candelabra ring). **2.5** is the default: the pool now tails smoothly to 2.5× the
+    // authored end, reading ~⅓ of its 1 yd brightness AT the authored end and ~8 % at twice it.
+    // `>1.6` widens further, `<1.6` tightens, `0` switches the window off (the 48 yd lane), so the
+    // whole shape A/Bs from chat.
+    ours(
+        "interiorAttenScale",
+        "1.6",
+        "benilla's own: scale on interior fixtures' authored attenuation window = their effective \
+         radius, 0..8 (0 = no window, the old flat lane)",
+    ),
+    // MONKEY (room gate): whether an interior fixture may light only the rooms it CLAIMS — its
+    // authored MOLR groups unioned with the interior groups whose MOGI bounding box it stands
+    // inside (`LightLitRooms` carries the corpus evidence for why MOLR alone is far too sparse:
+    // the Goldshire inn authors one on 2 of its 12 groups). Off restores the pre-gate behaviour:
+    // every interior fixture in range lights every interior surface in range, so an inn's
+    // ground-floor candles light its basement through the floor. Kept as a dial because a room the
+    // gate leaves on ambient alone looks the same as a bug, and this tells the two apart in one
+    // keystroke.
+    ours(
+        "interiorRoomGate",
+        "1",
+        "benilla's own: an interior fixture lights only the WMO groups it claims (0 = the old \
+         leak-through-walls behaviour)",
+    ),
+    ours(
+        "interiorShadows",
+        "1",
+        "benilla's own: interior fixtures cast real shadows (Stage B, the nearest few); needs \
+         interiorLight",
+    ),
+    // MONKEY (outdoor torch shadows): the outdoor half of the same cube-map lane. Its own row
+    // because it is its own audience (a night camp, a lit village) and its own cost profile — and
+    // because "turn the outdoor shadows off" must not also turn the inn's candles' shadows off.
+    ours(
+        "exteriorShadows",
+        "1",
+        "benilla's own: outdoor fire lights (campfires, braziers, lampposts) cast real shadows at \
+         night; no effect by day",
+    ),
+    // MONKEY (daylight: terrain torch casters): the ground as a torch caster.
+    ours(
+        "torchTerrainShadows",
+        "0",
+        "benilla's own: the ground casts into outdoor fire shadows (hills and banks block a fire's \
+         light); needs exteriorShadows",
+    ),
+    // MONKEY (static torch cache): residency and per-frame work have separate live budgets.
+    ours(
+        "interiorShadowCasters",
+        "12",
+        "benilla's own: resident interior fixture shadow maps, 1..16",
+    ),
+    ours(
+        "interiorShadowDynamic",
+        "4",
+        "benilla's own: nearest promoted fixtures with moving entity shadows, 0..16",
+    ),
+    // MONKEY (torch lane perf): the moving-caster REGATHER cadence. Its own row (and not folded
+    // into `interiorShadowDynamic`) because it trades a different currency: `Dynamic` buys how
+    // MANY fixtures overlay moving casters, this buys how OFTEN the one shared overlay mesh is
+    // rebuilt. Neither of the count dials moved the frame time at all, so the cost was never per
+    // map -- it was this gather + mesh mutation, paid once a frame no matter what the counts said.
+    // `0` is the pre-feature every-frame behaviour, kept as the live A/B.
+    ours(
+        "interiorShadowEntityRate",
+        "30",
+        "benilla's own: how often (Hz) moving torch-shadow casters are regathered; 0 = every frame",
+    ),
+    // MONKEY (torch caster selection): the PCF tap radius on the torch maps. Candle clusters read
+    // very hard-edged at 1 (a half-texel box on a 512² face); 2 is a visible softening for four
+    // extra texel-neighbourhood taps' worth of cache pressure, no extra samples.
+    ours(
+        "interiorShadowSoft",
+        "1.5",
+        "benilla's own: torch-shadow edge softness — the PCF tap radius scale at a CONTACT, 0.5..3",
+    ),
+    // MONKEY (shadow floor): how BLACK a torch shadow is allowed to get. The lane's shadows were
+    // the only occlusion in the direct term and took all of it, which is what made them read as
+    // scars rather than as shadows; 0.7 leaves 30 % standing in place of the bounce light this
+    // renderer does not have. `1` is the shipped look, `0` is off.
+    ours(
+        "torchShadowStrength",
+        "0.7",
+        "benilla's own: torch-shadow darkness — how much of the direct term a shadow removes, 0..1",
+    ),
+    ours(
+        "interiorDebug",
+        "0",
+        "benilla's own: interior diagnostic overlay — 1 classification, 2 shadow, 3 caster count, 4 WMO lane map",
+    ),
+    // MONKEY (darkness gains): the two live dim dials. `nightGain` scales the EXTERIOR day/night
+    // law (the packed ambient/diffuse/specular rows) by `mix(1, gain, night_w)`, so it is exactly
+    // inert by day and full strength after dark; `interiorGain` scales the room lane's inputs (base
+    // ambient, per-fixture fill, and every interior fixture's colour). Both fold in at PACK time in
+    // `build_light_data`, so `SetCVar` moves the whole world on the very next frame — which is how
+    // "20 % / 30 % darker" gets judged at all, and `1` on either is the restore.
+    //
+    // Night gain leaves fire lights alone; interior gain also scales interior fixtures,
+    // including their candlelight. Outdoor fires retain their brightness under both dials.
+    ours(
+        "nightGain",
+        "0.45",
+        "benilla's own: exterior night brightness, 0.2..1.5 (1 = the reference's own night)",
+    ),
+    // MONKEY (lighting debug panel): weaker fresh interiors; persisted gains still win at boot.
+    ours(
+        "interiorGain",
+        "0.5",
+        "benilla's own: WMO interior brightness, 0.2..1.5 (1 = the pre-dial fixture-lit room)",
+    ),
+    // MONKEY (enclosed day floor): the daylight a room INSIDE A BUILDING gets by day, for the
+    // doorways this renderer cannot locate in the data (the Goldshire inn's entry group authors no
+    // portal, no EXT-class batch, no stitched vertex and no bake hot spot — there is nowhere to
+    // stand a fixture). An additive ambient in `interiorAmbient`'s own units, scaled by the sun's
+    // day envelope, so it is exactly 0 at night and the night look never moves. `0` is the restore.
+    ours(
+        "interiorDaylight",
+        "0.0",
+        "benilla's own: daylight floor for rooms inside a building, 0..1 (0 = none, the old look)",
+    ),
+    // MONKEY (fix-daylight): the district window split, gateable (default on = merged behaviour).
+    ours(
+        "daylightWindowSplit",
+        "1",
+        "benilla's own: split city window batches into window-sized daylight apertures (applies to newly loaded buildings)",
+    ),
+    // MONKEY (bake floor): the share of an interior batch's own MOCV bake that survives the live-
+    // fixture lane. The lane throws the bake away and lets the fixtures decide, which leaves a room
+    // no fixture reaches (the Lion's Pride Inn's east vestibule: MOLR 0, no claims, one faded
+    // portal hop) rendering black between a sky-lit porch and a candle-lit hall — something the
+    // reference client cannot do, because it draws every interior batch at its bake regardless of
+    // lights. A fraction of the bake, inside the room law's rolloff, so a lit surface barely moves.
+    ours(
+        "interiorBakeFloor",
+        "0.12",
+        "benilla's own: share of an interior batch's baked light kept where no fixture reaches, 0..1 (0 = the old look)",
+    ),
+    // MONKEY (fire GO lights): the gain on lights SYNTHESISED from a model's flame emitter for the
+    // ~410 fire props the artists never gave a light block (campfires, wall torches, magic
+    // braziers, forges, candles). Live, like the interior knobs — and `0` is the kill switch for
+    // the whole invented-light lane, which matters because unlike everything beside it this one is
+    // a heuristic over content rather than a byte-verified mechanism.
+    ours(
+        "fireLightGain",
+        "1",
+        "benilla's own: brightness of lights synthesised from fire props' flame emitters (0 = off)",
+    ),
+    // MONKEY (spellLightGain): the same dial for the SPELL lane — a kit's aura glow, a missile's
+    // core, an impact flash, a firework's burst. A separate knob from the one above it because the
+    // two are separate judgements: that one tunes SCENERY (how bright is the invented campfire),
+    // this one tunes COMBAT (how hard does a fight flash the room), and a spell light carries both
+    // markers, so one dial over both would mean dimming the world's hearths to calm a fireball.
+    // `0` is this lane's kill switch and reaches nothing else.
+    ours(
+        "spellLightGain",
+        "1",
+        "benilla's own: brightness of spell, missile and impact lights (0 = off)",
+    ),
+    // MONKEY (flame flicker): how hard every FLAME breathes — candles fast and shallow, bonfires
+    // slow and shallower still (`benilla_world::lighting::FlameKind`). Live like the gain beside
+    // it, and `0` restores the steady constants every fire had before the feature, which is the
+    // escape hatch this needs precisely because "subtle" is a judgement call and a flicker that
+    // reads as a strobe is worse than none.
+    ours(
+        "fireFlicker",
+        "1",
+        "benilla's own: how strongly fire lights flicker — 0 steady, 1 default, 2 pronounced",
+    ),
     // `gxWindow` (`0x63a889`): "0" on enUS; zhCN registers "1", as it does `gxMaximize`
     // (`0x63a8e0`), and koKR `AutoInteract` (`0x603390`). The knob is
     // [`crate::video::VideoConfig::display`]. Deviation: "0" raises a borderless fullscreen window

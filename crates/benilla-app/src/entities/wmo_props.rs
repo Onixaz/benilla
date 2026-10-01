@@ -162,10 +162,11 @@ pub(super) fn spawn_wmo_gameobject_props(
     time: Res<Time>,
     mut hosts: Query<(Entity, &GlobalTransform, &mut WmoProps)>,
 ) {
-    let Some((mat_cache, materials, light)) = mats.pieces() else {
-        return; // no shared light buffer yet
+    let Some((mat_cache, materials, light, torch)) = mats.pieces() else {
+        return; // no shared light buffer / torch bindings yet
     };
     let light = &light;
+    let torch = &torch;
     // Animated props take their phase from their spawn time.
     let now = time.elapsed_secs();
     for (entity, host_gt, mut props) in &mut hosts {
@@ -275,6 +276,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                 mat_cache,
                 materials,
                 light,
+                torch,
                 &m.submeshes,
                 forms.slices(&prop.handle),
                 prop.local, // doodad-local; the parent composes the world pose
@@ -387,19 +389,36 @@ pub(super) fn spawn_wmo_gameobject_props(
                 }
                 // M2 point lights, children at the prop-local position, carried with the hull. A
                 // directional light feeds an ambient term, and a static 0 visibility key is dark.
-                for l in m.lights.iter().map(|l| &l.def) {
-                    if !l.casts() {
+                for l in m.lights.iter() {
+                    if !l.def.casts() {
                         continue;
                     }
-                    let glow = commands
-                        .spawn((
-                            point_light(l.diffuse_color, l.diffuse_intensity),
-                            Transform::from_translation(
-                                prop.local.transform_point(wow_to_bevy(l.position)),
-                            ),
-                            Visibility::default(),
-                        ))
-                        .id();
+                    let local = prop.local.transform_point(wow_to_bevy(l.def.position));
+                    let mut glow = commands.spawn((
+                        point_light(l.def.diffuse_color, l.def.diffuse_intensity),
+                        Transform::from_translation(local),
+                        Visibility::default(),
+                    ));
+                    // MONKEY (fire GO lights): a transport prop takes SYNTHESISED lights like the
+                    // other entity lanes (the deck braziers on a zeppelin/boat author none), tagged
+                    // so the live `fireLightGain` reaches them.
+                    if l.synthetic {
+                        glow.insert(benilla_world::lighting::SyntheticFireLight);
+                    }
+                    // MONKEY (flame flicker): a deck brazier on a moving zeppelin burns too. The
+                    // seed is the prop-LOCAL position (the hull moves; the phase must not) mixed
+                    // with the host, so two identical decks don't beat together.
+                    if let Some(kind) = benilla_world::lighting::flame_kind_for(
+                        l.flame,
+                        l.synthetic,
+                        l.def.diffuse_color,
+                        l.def.diffuse_intensity,
+                    ) {
+                        let seed = benilla_world::lighting::flicker_seed(local)
+                            ^ entity.to_bits().rotate_left(11) as u32;
+                        glow.insert(benilla_world::lighting::FlameFlicker::new(kind, seed));
+                    }
+                    let glow = glow.id();
                     commands.entity(entity).add_child(glow);
                     lights += 1;
                 }

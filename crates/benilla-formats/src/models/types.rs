@@ -262,6 +262,24 @@ pub enum FogPolicy {
     Off = 4,
 }
 
+/// MONKEY (skybox): a two-texture batch's second stage (`textureCount 2`, which no stock 1.12
+/// model authors): texture `textureLookup[combo + 1]` on the UV set `texUnitLookup[coord + 1]`,
+/// moved by `texAnimLookup[transform + 1]`, multiplied into stage 0 (`Mod`, or `Mod2x` on the
+/// modern `0x4014` combiner).
+#[derive(Debug, Clone, Default)]
+pub struct StageTwo {
+    pub texture: Option<String>,
+    pub wrap_x: bool,
+    pub wrap_y: bool,
+    /// Per vertex, parallel to [`RenderSubmesh::positions`], from the stage's own UV set.
+    pub uvs: Vec<[f32; 2]>,
+    /// The stage's colour doubles (`Mod2x`).
+    pub mod2x: bool,
+    pub uv_anim: Option<UvAnim>,
+    pub uv_rot: Option<super::key_anim::KeyAnim<[f32; 4]>>,
+    pub uv_scale: Option<super::key_anim::KeyAnim<[f32; 2]>>,
+}
+
 /// One render batch: self-contained geometry and its material.
 #[derive(Debug, Clone)]
 pub struct RenderSubmesh {
@@ -346,6 +364,8 @@ pub struct RenderSubmesh {
     /// over its base); the reference draws both from one vertex array under LEQUAL, the later
     /// winning exactly (`0x70c190`), so consolidators refuse a section they cannot take whole.
     pub section: Option<u16>,
+    /// MONKEY (skybox): the second texture stage, `None` on every one-texture batch.
+    pub stage1: Option<StageTwo>,
     /// Texture coordinates generated as a view-space sphere map, not read from [`Self::uvs`]
     /// (`texture_unit_lookup[texCoordSet] > 2`): `uv = normalize(P − 2(P·N)N).xy · 0.5 + 0.5`.
     /// Such a mesh parks its UVs at one point (`GnomeSubwayGlass.m2`).
@@ -416,6 +436,7 @@ impl Default for RenderSubmesh {
             wmo_batch: None,
             env_map: false,
             section: None,
+            stage1: None,
         }
     }
 }

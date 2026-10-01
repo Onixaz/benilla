@@ -28,6 +28,14 @@
     view_transformations::position_world_to_clip,
     mesh_view_bindings::{view, globals},
 }
+// MONKEY (enhanced water): the optional water module - see enhanced_water.wgsl and WATER.md.
+#import benilla::enhanced_water::{water_active, water_swell, enhanced_water, WaterFragment}
+// MONKEY (p0 MonkeyFrame): the programme block's struct, mirrored after the point table.
+#import benilla::monkey_frame
+// MONKEY (p0 fog hook): the one distance-fog law every receiver calls.
+#import benilla::fog_hook
+// MONKEY (post): shared tier-gated HDR emission and magma fog resistance.
+#import benilla::emissive_hook
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var frames: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var frames_samp: sampler;
@@ -58,6 +66,10 @@ struct WowLight {
     _grade: vec4<f32>,             // 17
     wmo_fog_color: vec4<f32>,      // 18 rgb = interior fog (block 2); w = enable
     wmo_fog_params: vec4<f32>,     // 19 x = start yd; y = end yd
+    _point_count: vec4<f32>,       // 20 point-light count, unread here
+    _points: array<vec4<f32>, 512>, // 21+ point-light table, unread here
+    // MONKEY (p0 MonkeyFrame): the programme block after the point table (monkey_frame.wgsl).
+    monkey: monkey_frame::MonkeyFrame,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(90) var<storage, read> wow_light: WowLight;
 
@@ -73,6 +85,8 @@ struct LiquidVsOut {
     @location(5) vcolor: vec4<f32>,
     // `MeshTag` bit 30: the room's per-frame interior-fog gate, the reference's `[0xca7f00]`.
     @location(6) @interpolate(flat) room_fog: u32,
+    // MONKEY (reviewfix): the analytic water domain before the ocean's vertex displacement.
+    @location(7) source_xz: vec2<f32>,
 }
 
 // Sun sheen (`secondary`): the Blinn highlight `light_spec.rgb · (N·H)^shininess`.
@@ -124,9 +138,9 @@ fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>, room_fog: u32) -> vec3<f32> {
         return rgb;
     }
     let eye_z = -(view.view_from_world * vec4<f32>(world_pos, 1.0)).z;
-    let denom = max(fog_span.y - fog_span.x, 0.001);
-    let factor = clamp((fog_span.y - eye_z) / denom, 0.0, 1.0);
-    return mix(fog_color.xyz, rgb, factor);
+    // MONKEY (p0 fog hook): the shared fog law (fog_hook.wgsl); classic is bit-identical.
+    return fog_hook::apply_fog(rgb, fog_color.xyz, fog_span, eye_z, world_pos, view.world_position,
+        true, wow_light.monkey);
 }
 
 @vertex
@@ -135,6 +149,9 @@ fn vertex(in: Vertex) -> LiquidVsOut {
     let world_from_local = mesh_functions::get_world_from_local(in.instance_index);
     out.world_position =
         mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(in.position, 1.0));
+    out.source_xz = out.world_position.xz;
+    // MONKEY (enhanced water): ocean Gerstner displacement; zero on Classic/other surfaces.
+    out.world_position += vec4<f32>(water_swell(out.source_xz, in.uv_b.x, in.uv_b.y), 0.0);
     out.clip_position = position_world_to_clip(out.world_position.xyz);
     out.world_normal = mesh_functions::mesh_normal_local_to_world(in.normal, in.instance_index);
     out.uv = in.uv;
@@ -194,7 +211,27 @@ fn fragment(in: LiquidVsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    // The animated frame; `view.mip_bias` is the render-scale LOD compensation, 0 at native.
+    // MONKEY (enhanced water): the optional module takes the whole surface; Classic falls through.
+    if water_active() {
+        var shallow_enhanced = wow_light.water_river[0];
+        var deep_enhanced = wow_light.water_river[1];
+        if w.kind.y > 0.5 && w.path.x < 0.5 {
+            shallow_enhanced = wow_light.water_ocean[0];
+            deep_enhanced = wow_light.water_ocean[1];
+        }
+        // Returned as-is: the module fogs its own surface terms (the scene it shows through is
+        // already fogged).
+        return enhanced_water(
+            // MONKEY (water): the enhanced interior arm consumes the MOMT colour already carried
+            // by the reference fragment interface; exterior/ADT vertices supply white.
+            WaterFragment(in.clip_position, in.world_position, in.source_xz, in.depth, in.vcolor,
+                in.room_fog),
+            shallow_enhanced, deep_enhanced);
+    }
+
+    // Animated frame. For water/ocean this is the DETAIL ripple (RGB ≈ near-black, ALPHA = ripple);
+    // for magma/slime it is the OPAQUE BODY texture.
+    // `view.mip_bias`: the render-scale LOD compensation (1639), 0.0 at native and above.
     let detail = textureSampleBias(
         frames,
         frames_samp,
@@ -206,7 +243,12 @@ fn fragment(in: LiquidVsOut) -> @location(0) vec4<f32> {
     // Magma/slime: the sheet is the opaque body, unmodulated (the ADT vertex has no colour, the WMO
     // one is `0xffffffff`) and unlit (lighting off on both paths), but fogged.
     if (w.kind.x > 0.5) {
-        return vec4<f32>(apply_fog(detail.rgb, in.world_position.xyz, in.room_fog), 1.0);
+        // MONKEY (post): distant magma keeps some authored body and crosses 1.0 for bloom.
+        let fogged = apply_fog(detail.rgb, in.world_position.xyz, in.room_fog);
+        let hot = emissive_hook::emissive_boost(
+            detail.rgb, emissive_hook::EMISSIVE_MAGMA, wow_light.light_diffuse.w, 1.0);
+        return vec4<f32>(mix(fogged, hot,
+            emissive_hook::magma_fog_resist(wow_light.light_diffuse.w)), 1.0);
     }
 
     // V, from the authored depth byte CPU-side: clamp(byte/42) on river/lake (LUT `0xc81768`,

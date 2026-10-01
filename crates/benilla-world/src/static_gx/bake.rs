@@ -12,8 +12,9 @@ use super::{
     MAX_DIRTY_FRAMES, REBAKE_FRAMES,
 };
 use super::{
-    WORD_CLASS_INT, WORD_CLASS_TRANS, WORD_FOG_OFF, WORD_HAS_VC, WORD_INTERIOR, WORD_MATTE,
-    WORD_SHADE_LIT, WORD_TEXTURED, WORD_UNLIT, WORD_WINDOW, WORD_WMO, WORD_WRAP_X, WORD_WRAP_Y,
+    WORD_CLASS_INT, WORD_CLASS_TRANS, WORD_FOG_OFF, WORD_FOLIAGE_WIND, WORD_HAS_VC, WORD_INTERIOR,
+    WORD_MATTE, WORD_SHADE_LIT, WORD_TEXTURED, WORD_UNLIT, WORD_WINDOW, WORD_WMO, WORD_WRAP_X,
+    WORD_WRAP_Y,
 };
 
 /// Print the declined-batch census, beside the accepted count, once the counts have sat still for
@@ -208,6 +209,8 @@ fn bake_cell(items: &[GxItem], meshes: &mut Assets<Mesh>) -> render::GxCellDraw 
             | (u32::from(item.matte) * WORD_MATTE)
             | (u32::from(item.texture.is_some()) * WORD_TEXTURED)
             | (u32::from(has_vc) * WORD_HAS_VC)
+            // MONKEY (wind): only classified alpha-tested tree/bush leaf cards carry this bit.
+            | (u32::from(item.foliage_wind) * WORD_FOLIAGE_WIND)
             // An interior prop is WORD_INTERIOR without WORD_WMO; a slot-less prop keeps the
             // exterior law, as on the entity path.
             | item.prop.as_ref().map_or(0, |p| {
@@ -279,6 +282,9 @@ fn bake_cell(items: &[GxItem], meshes: &mut Assets<Mesh>) -> render::GxCellDraw 
             order: item.wmo.as_ref().map_or(0, |w| w.order),
             sidn: item.wmo.as_ref().map_or([0; 3], |w| w.sidn),
             slot: item.prop.as_ref().and_then(|p| p.slot).unwrap_or(0),
+            ext_night: item.wmo.as_ref().is_some_and(|w| w.ext_night),
+            // MONKEY (enclosed day floor): rides the bake exactly as `ext_night` does.
+            enclosed: item.wmo.as_ref().is_some_and(|w| w.enclosed),
         });
     }
     // The shader rebuilds world = v + origin. The origin is the f32-rounded centre and the
@@ -534,6 +540,8 @@ mod tests {
             sidn: Some([10, 20, 30]),
             window: true,
             batch_order: group + 1,
+            ext_night: false,
+            enclosed: false,
         };
         // An INT batch of group 2, pushed first…
         let mut b = batch(&g, Vec3::new(1.0, 0.0, 1.0), None, ModelBlend::Opaque);

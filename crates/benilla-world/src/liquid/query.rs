@@ -240,6 +240,16 @@ impl LiquidGrid {
 }
 
 impl WaterChunkInfo {
+    /// MONKEY (visualfix): an ocean surface (pinned to z = 0) whose footprint comes within `reach`
+    /// yards of the WoW XY, for the volumetric haze's sea-level plane.
+    pub fn ocean_within(&self, x: f32, y: f32, reach: f32) -> bool {
+        matches!(self.kind, LiquidKind::Ocean)
+            && x > self.min_x - reach
+            && x < self.max_x + reach
+            && y > self.min_y - reach
+            && y < self.max_y + reach
+    }
+
     /// The grid's highest wet vertex, which `super::real_data` shows is not the surface.
     #[cfg(test)]
     pub(super) fn chunk_max_z(&self) -> f32 {
@@ -343,7 +353,24 @@ impl WaterChunkInfo {
         }
     }
 
-    /// Is this WoW-space XY inside the wet footprint's box?
+    /// MONKEY (swim waves) — **does this surface's MESH heave?** i.e. is its rendered height the
+    /// grid height plus [`super::waves`]'s long swell, rather than the grid height flat.
+    ///
+    /// The shader's vertex-displacement arm (`enhanced_water.wgsl` (`water_swell`)) runs on exactly one combination:
+    /// not fullbright (`water.lane.z < 0.5`), the ocean swatch (`water.lane.y > 0.5`), and the ADT MCLQ
+    /// renderer (`water.lane.x < 0.5`) — the three static halves of that gate, which is what this
+    /// answers. The fourth, `water.mode.x > 0.5` (Enhanced or High), is a **resource**
+    /// ([`benilla_assets::WaterQuality`]) and not a property of a surface, so it stays the
+    /// caller's to apply; folding a global setting into a per-chunk predicate is how the two
+    /// would eventually disagree about the same frame.
+    ///
+    /// A body is only lifted by water that is actually lifting: a river, a WMO pool and lava all
+    /// render flat, and bobbing on them would be a body floating over its own reflection.
+    pub(crate) fn has_vertex_swell(&self) -> bool {
+        matches!(self.source, LiquidSource::AdtChunk) && self.kind == LiquidKind::Ocean
+    }
+
+    /// Is this WoW-space XY inside the chunk's wet footprint?
     pub(crate) fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.min_x && x <= self.max_x && y >= self.min_y && y <= self.max_y
     }

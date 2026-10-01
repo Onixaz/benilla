@@ -14,6 +14,37 @@ use super::TerrainStreamer;
 #[derive(Resource, Default, PartialEq, Eq)]
 pub struct CurrentArea(pub Option<u32>);
 
+/// MONKEY (reviewfix-a): the area under the CAMERA, written only under `WOW_CAPTURE` while there
+/// is no avatar. A deterministic capture has no body, so [`CurrentArea`] stays `None`; area-keyed
+/// look lanes (zone grading) read this as their capture fallback. The area authority (music,
+/// channels, names) never reads it.
+#[derive(Resource, Default, PartialEq, Eq)]
+pub struct CaptureCameraArea(pub Option<u32>);
+
+/// MONKEY (reviewfix-a): see [`CaptureCameraArea`]; a helper of [`update_current_area`] (one
+/// system, so the schedule gains no new unordered pairs).
+fn capture_camera_area(
+    out: &mut CaptureCameraArea,
+    streamer: &TerrainStreamer,
+    adt_tiles: &Assets<AdtTile>,
+    eye: Option<Vec3>,
+) {
+    let Some(eye) = eye else {
+        return;
+    };
+    let wow = bevy_to_wow(eye);
+    let (tx, ty) = world_to_tile(wow[0], wow[1]);
+    let found = streamer
+        .tiles
+        .get(&(tx as i32, ty as i32))
+        .and_then(|ts| adt_tiles.get(&ts.handle))
+        .and_then(|adt| benilla_formats::area_id_at(&adt.chunks, wow))
+        .filter(|&id| id != 0);
+    if found.is_some() && out.0 != found {
+        out.0 = found;
+    }
+}
+
 /// The set of [`update_current_area`]. Every consumer that acts on the area orders after it, so
 /// leaf, indoor bit and names come from one frame (the reference resolves them in one pass).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,8 +149,18 @@ pub(super) fn update_current_area(
     adt_tiles: Res<Assets<AdtTile>>,
     interior: Res<crate::wmo_portal::CurrentAreaInterior>,
     wmo_areas: Option<Res<crate::wmo_portal::WmoAreas>>,
+    // MONKEY (reviewfix-a): the capture-only camera area (absent in unit-test worlds).
+    capture_area: Option<ResMut<CaptureCameraArea>>,
+    camera: Query<&GlobalTransform, With<crate::view::WorldCamera>>,
+    mut capture: Local<Option<bool>>,
 ) {
     let Some(wow) = focus.body_pos() else {
+        if let Some(mut out) = capture_area {
+            if *capture.get_or_insert_with(|| std::env::var_os("WOW_CAPTURE").is_some()) {
+                let eye = camera.iter().next().map(GlobalTransform::translation);
+                capture_camera_area(&mut out, &streamer, &adt_tiles, eye);
+            }
+        }
         // No avatar: the area dies with the character session, or the next login reads this
         // character's zone. `body_pos()` is `None` at both glue screens; a recoverable disconnect
         // keeps the body, and the area with it.

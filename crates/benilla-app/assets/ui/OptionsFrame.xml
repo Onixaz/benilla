@@ -91,9 +91,13 @@
         end
 
         -- The category tree in list order; keys are the row name suffixes.
+        -- MONKEY (advanced graphics): "AdvancedGraphics" joins the System group under Graphics.
+        -- MONKEY (advanced graphics): "AdvancedGraphics" joins the System group under Graphics —
+        -- the seat the era's own tree gives a page that refines the one above it, and the seat
+        -- that keeps the three shadow rows it inherits one row away from where they used to be.
         BENILLA_OPTIONS_CATEGORY_KEYS = {
             "Controls", "Interface", "ActionBars", "Combat", "Chat", "Keybindings", "Nameplates",
-            "Graphics", "Audio",
+            "Graphics", "AdvancedGraphics", "Audio",
         }
 
         -- The era UIParent draws smaller than our 768-unit canvas; a chosen value, not the
@@ -433,6 +437,585 @@
             .. "which it could only do in exclusive fullscreen. benilla applies it to the "
             .. "finished image instead, so it works in both display modes."
 
+        -- ══ MONKEY (advanced graphics): the Advanced Graphics page's own strings, EN + RU ═════
+        --
+        -- The page that gives a PLAYER the dynamic light and shadow system. Until it existed the
+        -- lanes were reachable only from `/console` and the native debug panel — and the panel
+        -- does not ship in a player build, so a player had no way in at all. Three rows move here
+        -- off the Graphics page (Real Character Shadows, World Shadows, Shadow Distance) with
+        -- their settings and their descriptions unchanged; the other twelve are new seats on
+        -- CVars this client has read for some time.
+        --
+        -- **Every string on it is authored in both languages** (the project's own standing rule),
+        -- picked by `GetLocale()`, and there is no other localisation pattern in this window to
+        -- follow: every page above is 1.12 GlobalStrings, whose own file IS the localisation. So
+        -- the table is here, next to the page, rather than in a scheme of its own.
+        --
+        -- TWO CAVEATS, both true of the client and not of this table: benilla's `GetLocale()`
+        -- answers `enUS` unconditionally today (it ships and reads enUS data only), so the ruRU
+        -- column is dormant until that changes; and 1.12's own `FRIZQT__.TTF` carries no Cyrillic
+        -- glyphs, so a Russian build needs a font that does before these read as words. Neither is
+        -- a reason to ship the page half-authored — both are one line away from being true, and a
+        -- string written later is a string written to a different standard.
+        --
+        -- The VALUES the rows write are never localised: a dropdown entry carries the engine's own
+        -- string in `value` and the player's language in `text`, so `config.toml` and `/console`
+        -- read the same words on every install.
+        BENILLA_ADVGFX_STRINGS = {
+            enUS = {
+                page = "Advanced Graphics",
+                lightingQuality = "Lighting Quality",
+                -- MONKEY (presets): the Graphics Preset and Render Distance rows.
+                graphicsQuality = "Graphics Preset",
+                renderDistance = "Render Distance",
+                pClassic = "Classic",
+                qUltra = "Ultra",
+                -- MONKEY (volumetric fog): localised atmospheric quality row.
+                volumetricFog = "Volumetric Fog",
+                -- MONKEY (post): HDR excess + halo quality.
+                bloom = "Bloom",
+                sunShafts = "Sun Shafts",
+                colorGrading = "Colour Grading",
+                -- MONKEY (sky): the sky tier row.
+                skyQuality = "Sky Quality",
+                fogOff = "Off",
+                -- MONKEY (skybox): the zone skybox row.
+                zoneSkyboxes = "Zone Skyboxes",
+                waterQuality = "Water Quality",
+                waterClassic = "Classic",
+                waterEnhanced = "Enhanced",
+                waterHigh = "High",
+                lavaGlow = "Lava Glow",
+                qOff = "Off",
+                qLow = "Low",
+                qMedium = "Medium",
+                qHigh = "High",
+                qCustom = "Custom",
+                characterShadows = "Real Character Shadows",
+                worldShadows = "World Shadows",
+                shadowDistance = "Shadow Distance",
+                shadowResolution = "Shadow Resolution",
+                moonShadows = "Moon Shadows",
+                interiorLight = "Dynamic Interior Lighting",
+                interiorShadows = "Indoor Torch Shadows",
+                exteriorShadows = "Outdoor Torch Shadows",
+                torchTerrainShadows = "Terrain Blocks Torchlight",
+                torchSoft = "Torch Shadow Softness",
+                fireLight = "Fire Light Brightness",
+                fireFlicker = "Fire Flicker",
+                spellLights = "Spell Lights",
+                nightDarkness = "Night Darkness",
+                interiorDarkness = "Interior Darkness",
+                -- MONKEY (p0 skyDither)
+                skyDither = "Sky Dithering",
+                -- MONKEY (fog)
+                fogModel = "Modern Fog",
+                -- MONKEY (wet)
+                rainSurfaces = "Wet Surfaces in Rain",
+                -- MONKEY (wind)
+                foliageWind = "Foliage Wind",
+                windGrass = "Grass",
+                windTrees = "Grass + Trees",
+                foliageWindStrength = "Foliage Wind Strength", -- MONKEY (fix-wind)
+                -- MONKEY (ao): localised contact-shadow row.
+                ambientOcclusion = "Ambient Occlusion",
+                -- MONKEY (lampfog)
+                lampFog = "Lamp Fog",
+                -- GFX (volumetric light) / (moonlight)
+                volumetricLight = "Volumetric Light",
+                volumetricLightStrength = "Volumetric Light Strength",
+                moonLight = "Moonlight",
+                -- MONKEY (integration): the daylight lane's district window split.
+                daylightWindowSplit = "City Window Daylight",
+                yards = "%d yd",
+                tips = {
+                    -- MONKEY (presets)
+                    GRAPHICS_QUALITY =
+                        "Sets every graphics setting at once: Lighting Quality and everything it sets, "
+                        .. "Render Distance, Sky Quality, Sky Dithering, Modern Fog, Wet Surfaces in Rain, "
+                        .. "Terrain Blocks Torchlight, the daylight through city windows, Ambient Occlusion, Lamp Fog, "
+                        .. "Zone Skyboxes, Volumetric Light and Moonlight.\n\n"
+                        .. "Classic is the original client: every enhancement off and the original 350 yd "
+                        .. "view distance. Low and Medium add the enhancements that cost almost nothing; High "
+                        .. "is the recommended look; Ultra raises every quality to its maximum and the view "
+                        .. "distance to 1497 yd, and costs the most.\n\n"
+                        .. "Shadow Distance and Torch Shadow Softness stay as you set them. Changing any "
+                        .. "setting the preset sets shows Custom.",
+                    RENDER_DISTANCE =
+                        "How far the detailed world is drawn, in yards: the same setting as Terrain "
+                        .. "Distance on the Graphics page, with a longer reach. Past 777 yd, the original "
+                        .. "client's limit, the extra distance shows through Modern Fog; with the original "
+                        .. "fog the zone's own fog hides it.\n\n"
+                        .. "Farther costs more memory, loading and GPU time.",
+                    LIGHTING_QUALITY =
+                        "Sets character, world, indoor torch and outdoor torch shadows; dynamic "
+                        .. "interior lighting; moon shadows; volumetric fog; water quality; lava glow; fire and spell brightness; fire flicker; "
+                        .. "foliage wind; and night and interior darkness. Low, Medium and High also set shadow "
+                        .. "resolution; Medium and High also set resident and moving torch shadow counts.\n\n"
+                        .. "Off restores the original client's look: Classic water, no volumetric fog, lava glow or synthesised fire lights, "
+                        .. "night gain 1.0 and interior gain 1.0. All other settings, including "
+                        .. "Shadow Distance and Torch Shadow Softness, stay as you set them. "
+                        .. "Low, Medium and High use Enhanced water; mirror reflections stay opt-in. "
+                        .. "Ultra also raises shadow resolution to 4096 and the torch shadow counts to 16 and 8, "
+                        .. "and uses High water and High volumetric fog. "
+                        .. "Changing a preset member shows Custom when no preset matches.",
+                    -- MONKEY (volumetric fog): explain cost and the shadow-map dependency.
+                    -- MONKEY (post): Off guarantees the pre-HDR image.
+                    BLOOM =
+                        "Makes fire, lava, spells and lit windows carry a soft halo. Low uses a smaller blur chain; High is smoother. Off leaves the original image unchanged.",
+                    SUN_SHAFTS =
+                        "Draws sunlight through gaps in trees and buildings. Scene depth blocks the rays; they fade at night, off-screen and indoors.",
+                    COLOR_GRADING =
+                        "Applies a subtle zone-specific colour palette to the 3D world and blends between its day and night looks. The interface is never graded.",
+                    VOLUMETRIC_FOG =
+                        "Off disables volumetric fog. Low adds nearby haze and sun or moon shafts with fewer steps; High uses more steps for smoother shafts. Mist is heavier at dawn and in bad weather, and subtle indoors. Shafts require shadows; with shadows off only haze remains.",
+                    -- MONKEY (sky): what each sky tier adds.
+                    SKY_QUALITY =
+                        "Classic is the original client's sky. Enhanced smooths the sky's colour "
+                        .. "gradient, adds a soft glow around the sun and a starry night sky with the "
+                        .. "Milky Way. High also gives the clouds finer detail and sunlit edges. "
+                        .. "Costs very little.",
+                    -- MONKEY (skybox): what the zone skybox row changes.
+                    ZONE_SKYBOXES =
+                        "Draws the painted sky a zone's lighting names, as later expansions do: "
+                        .. "the volcanic sky of the Burning Steppes, the alien sky of the Blasted Lands "
+                        .. "and the starry night over Mount Hyjal, fading in at the zone's edge. "
+                        .. "Off keeps the original client's sky everywhere but ghost and dungeon skies. Nearly free.",
+                    WATER_QUALITY =
+                        "Classic is the original client's water. Enhanced adds soft shorelines, "
+                        .. "animated foam around shores and objects, moving wave highlights, sky reflection "
+                        .. "and light glints. High also adds mirror reflections and costs the most.",
+                    LAVA_GLOW =
+                        "How strongly lava lights its surroundings. 0 turns the glow off.",
+                    CHARACTER_SHADOWS =
+                        "Renders real dynamic silhouettes for players, NPCs, creatures, and mounts, replacing "
+                        .. "the legacy oval blob. Matches Wrath's character-only shadow tier. This uses "
+                        .. "additional GPU time and memory.",
+                    WORLD_SHADOWS =
+                        "Casts real dynamic shadows from the static world (trees, buildings, and foliage) "
+                        .. "following the sun, and switches off the baked terrain shadows they replace. "
+                        .. "Independent of Real Character Shadows. This uses additional GPU time and memory.",
+                    SHADOW_DISTANCE =
+                        "How far realtime shadows are drawn, in yards. Higher covers more ground but spreads "
+                        .. "the shadow map thinner (softer edges) and costs more. Applies on Apply.",
+                    SHADOW_RESOLUTION =
+                        "The edge of the sun's shadow map, in texels. Larger is sharper "
+                        .. "everywhere the shadow distance reaches.\n\n"
+                        .. "The cost is quadratic: 4096 draws four times the shadow pass of 2048 "
+                        .. "and holds four times the depth texture.",
+                    MOON_SHADOWS =
+                        "How dark a shadow thrown by moonlight is allowed to get. A little keeps "
+                        .. "the night from reading flat; a lot is stylised moonlight the original "
+                        .. "client never had.\n\n"
+                        .. "At 0 the moon casts nothing at all and the night renders exactly as "
+                        .. "it did before this existed. It costs nothing by day.",
+                    INTERIOR_LIGHT =
+                        "Lights the inside of buildings from the lamps, candles and hearths that "
+                        .. "actually stand in the room, instead of the lighting baked into the "
+                        .. "walls.\n\n"
+                        .. "Off restores the original client's baked interiors. On, it costs a "
+                        .. "little GPU time per lit surface. Indoor Torch Shadows require it; "
+                        .. "Outdoor Torch Shadows work independently.",
+                    INTERIOR_SHADOWS =
+                        "Lets the nearest indoor fires cast real shadows — a candle throws the "
+                        .. "table's shadow across the floor.\n\n"
+                        .. "Each promoted fire costs a shadow map of its own, which makes this "
+                        .. "the most expensive row on the page. Needs Dynamic Interior Lighting.",
+                    EXTERIOR_SHADOWS =
+                        "The same for fires out in the open: campfires, braziers and lampposts "
+                        .. "cast real shadows after dark.\n\n"
+                        .. "It does nothing by day and does not require Dynamic Interior Lighting.",
+                    TORCH_TERRAIN_SHADOWS =
+                        "Lets the ground itself take part in outdoor torch shadows: a hill or a "
+                        .. "bank between a fire and the slope behind it blocks the fire's light.\n\n"
+                        .. "Adds the nearby terrain to each outdoor fire's shadow map when it is "
+                        .. "rebuilt; the per-frame cost is small. Needs Outdoor Torch Shadows.",
+                    TORCH_SOFT =
+                        "How soft the edge of a torch shadow is where the object meets the "
+                        .. "ground. Low is hard and crisp; high spreads the edge the way a real "
+                        .. "flame does.\n\n"
+                        .. "It costs no extra shadow maps — only a wider filter over the ones "
+                        .. "already drawn.",
+                    FIRE_LIGHT =
+                        "How brightly campfires, torches, braziers and forges light the world "
+                        .. "around them. These are lights benilla invents from the flame itself; "
+                        .. "the original client's art carries none.\n\n"
+                        .. "At 0 the invented fire lights are off and only the lights the artists "
+                        .. "placed remain. Moving it costs nothing.",
+                    FIRE_FLICKER =
+                        "How strongly every flame's light breathes — candles quick and shallow, "
+                        .. "bonfires slow and steady.\n\n"
+                        .. "At 0 fires burn at a constant brightness, which is what they did "
+                        .. "before this existed. It is computed on the processor and costs the "
+                        .. "graphics card nothing.",
+                    SPELL_LIGHTS =
+                        "How brightly spells, missiles and impacts light the room around them — a "
+                        .. "fireball's flash, an aura's glow.\n\n"
+                        .. "Separate from Fire Light Brightness on purpose: calming a busy fight "
+                        .. "should not dim the world's hearths. At 0 no spell throws light.",
+                    NIGHT_DARKNESS =
+                        "How dark the world gets outdoors after sunset. "
+                        .. "1.0 = the original client night; lower = darker.\n\n"
+                        .. "It never touches the fires — the point is a darker night around the "
+                        .. "flame, not a dimmer flame. Inert while the sun is up, and free at any "
+                        .. "setting.",
+                    INTERIOR_DARKNESS =
+                        "Scales interior fixture light and room ambient, including the light from "
+                        .. "lamps and candles. Lower values make both dimmer.\n\n"
+                        .. "1.0 leaves these inputs unchanged. Free at any setting.",
+                    -- MONKEY (p0 skyDither)
+                    SKY_DITHER =
+                        "Adds a faint noise to the final image so smooth sky and fog gradients do not "
+                        .. "break into visible bands. Off is the original client's look. Practically free.",
+                    -- MONKEY (fog)
+                    FOG_MODEL =
+                        "Softer distance fog in the style of the modern client: it thickens gradually "
+                        .. "instead of in a straight ramp, glows toward the sun by day and shifts to the "
+                        .. "sky's colour in the distance, so the land melts into the horizon. Each zone "
+                        .. "keeps its own fog distance; above the original view-distance limit the fog "
+                        .. "recedes with it.\n\nOff is the original client's fog. Practically free.",
+                    -- MONKEY (wet)
+                    RAIN_SURFACES =
+                        "Rain slowly soaks the ground, stone and wood under the open sky: they darken, "
+                        .. "puddles gather on flat ground and wet tops catch the light; rain drops ring "
+                        .. "the water. It dries over a few minutes after the rain stops. Off is the "
+                        .. "original client's look. Nearly free, and only active while things are wet.",
+                -- MONKEY (wind)
+                    FOLIAGE_WIND =
+                        "Grass bends in two travelling wind waves and parts around nearby characters. "
+                        .. "Grass + Trees also gives classified tree and bush foliage a gentle sway.\n\n"
+                        .. "Off makes no vertex displacement and restores the unchanged image. Tree shadows stay static.",
+                    -- MONKEY (fix-wind)
+                    FOLIAGE_WIND_STRENGTH =
+                        "How far grass and foliage swing in the wind. 100% is the standard sway; lower "
+                        .. "is calmer, higher is a blustery day. Storms swing everything harder on top. "
+                        .. "Grass still parts around characters the same way. Needs Foliage Wind on.",
+                    -- MONKEY (ao): what the contact shadows touch and what they spare.
+                    AMBIENT_OCCLUSION =
+                        "Soft contact shadows where surfaces meet: under props and furniture, in the corners "
+                        .. "between walls and floors, and around characters' feet. Low uses fewer samples; "
+                        .. "High is smoother and reaches a little further.\n\n"
+                        .. "Fades out with distance and spares the sky, water, lit windows and flames. "
+                        .. "Off leaves the image unchanged.",
+                    -- MONKEY (integration): daylight window split.
+                    DAYLIGHT_WINDOW_SPLIT =
+                        "Large city buildings take daylight through each window on its own instead of "
+                        .. "treating a whole wall of windows as one opening, so halls like the cathedral "
+                        .. "catch the sun pane by pane.\n\nApplies to buildings loaded after the change. "
+                        .. "Off is the earlier look.",
+                    -- MONKEY (lampfog)
+                    LAMP_FOG =
+                        "Makes nearby lamps and fires glow through the air after dark. Low uses the "
+                        .. "nearest 16 lights; High uses 32. Rain and fog strengthen the halos. "
+                        .. "The effect is unshadowed, but stops at visible scene depth.\n\n"
+                        .. "Off is unchanged, and daylight is unchanged at every setting.",
+                    -- GFX (volumetric light)
+                    VOLUMETRIC_LIGHT =
+                        "Sunlight and moonlight shine through the air as visible shafts: rays through "
+                        .. "tree canopies, between buildings and past your character, following the "
+                        .. "real shadows. Thicker at dawn, in fog and in rain. Needs World Shadows or "
+                        .. "Real Character Shadows; not drawn indoors.\n\n"
+                        .. "Medium uses fewer samples; High is smoother. Off is unchanged.",
+                    VOLUMETRIC_LIGHT_STRENGTH =
+                        "How bright the volumetric light shafts are. 100% is the default; 0 hides them.",
+                    -- GFX (moonlight)
+                    MOONLIGHT =
+                        "The moon lights the world at night: a cool, dim light from where the moon "
+                        .. "really stands in the sky, added on top of the original night colours, with "
+                        .. "moon shadows when Moon Shadows is above 0.\n\n"
+                        .. "At 0 the night looks exactly as the original client drew it. Costs nothing by day.",
+                },
+            },
+            ruRU = {
+                page = "Расширенная графика",
+                lightingQuality = "Качество освещения",
+                -- MONKEY (presets): the Graphics Preset and Render Distance rows.
+                graphicsQuality = "Набор графики",
+                renderDistance = "Дальность прорисовки",
+                pClassic = "Классика",
+                qUltra = "Ультра",
+                -- MONKEY (post): Russian HDR excess + halo quality row.
+                bloom = "Свечение",
+                sunShafts = "Солнечные лучи",
+                colorGrading = "Цветокоррекция",
+                -- MONKEY (volumetric fog): Russian atmospheric quality row.
+                volumetricFog = "Объёмный туман",
+                -- MONKEY (sky): the sky tier row.
+                skyQuality = "Качество неба",
+                fogOff = "Выкл",
+                -- MONKEY (skybox): the zone skybox row.
+                zoneSkyboxes = "Небосводы зон",
+                waterQuality = "Качество воды",
+                waterClassic = "Классическое",
+                waterEnhanced = "Улучшенное",
+                waterHigh = "Высокое",
+                lavaGlow = "Свечение лавы",
+                qOff = "Выкл.",
+                qLow = "Низкое",
+                qMedium = "Среднее",
+                qHigh = "Высокое",
+                qCustom = "Своё",
+                characterShadows = "Настоящие тени персонажей",
+                worldShadows = "Тени мира",
+                shadowDistance = "Дальность теней",
+                shadowResolution = "Разрешение теней",
+                moonShadows = "Лунные тени",
+                interiorLight = "Динамическое освещение помещений",
+                interiorShadows = "Тени факелов в помещениях",
+                exteriorShadows = "Тени огней под открытым небом",
+                torchTerrainShadows = "Рельеф заслоняет огни",
+                torchSoft = "Мягкость теней от огня",
+                fireLight = "Яркость огня",
+                fireFlicker = "Мерцание огня",
+                spellLights = "Свет от заклинаний",
+                nightDarkness = "Темнота ночи",
+                interiorDarkness = "Темнота помещений",
+                -- MONKEY (p0 skyDither)
+                skyDither = "Дизеринг неба",
+                -- MONKEY (fog)
+                fogModel = "Современный туман",
+                -- MONKEY (wet)
+                rainSurfaces = "Мокрые поверхности в дождь",
+                -- MONKEY (wind)
+                foliageWind = "Ветер листвы",
+                windGrass = "Трава",
+                windTrees = "Трава + деревья",
+                foliageWindStrength = "Сила ветра листвы", -- MONKEY (fix-wind)
+                -- MONKEY (ao): Russian contact-shadow row.
+                ambientOcclusion = "Затенение окружения",
+                -- MONKEY (lampfog)
+                lampFog = "Свечение фонарей в тумане",
+                -- GFX (volumetric light) / (moonlight)
+                volumetricLight = "Объёмный свет",
+                volumetricLightStrength = "Сила объёмного света",
+                moonLight = "Лунный свет",
+                -- MONKEY (integration): the daylight lane's district window split.
+                daylightWindowSplit = "Дневной свет через окна города",
+                yards = "%d ярд.",
+                tips = {
+                    -- MONKEY (presets)
+                    GRAPHICS_QUALITY =
+                        "Задаёт все настройки графики сразу: качество освещения и всё, что оно задаёт, "
+                        .. "дальность прорисовки, качество неба, дизеринг неба, современный туман, мокрые "
+                        .. "поверхности в дождь, заслонение огней рельефом, дневной свет в окнах городов, "
+                        .. "затенение окружения, свечение фонарей в тумане, небосводы зон, объёмный свет и лунный свет.\n\n"
+                        .. "«Классика» — оригинальный клиент: все улучшения выключены, дальность обзора "
+                        .. "прежние 350 ярдов. «Низкое» и «Среднее» добавляют почти бесплатные улучшения; "
+                        .. "«Высокое» — рекомендуемый вид; «Ультра» поднимает всё качество до максимума, а "
+                        .. "дальность — до 1497 ярдов, и стоит дороже всего.\n\n"
+                        .. "Дальность теней и мягкость теней от огня сохраняют ваши значения. Изменение "
+                        .. "любой настройки набора показывает «Своё».",
+                    RENDER_DISTANCE =
+                        "Как далеко рисуется подробный мир, в ярдах: та же настройка, что «Дальность "
+                        .. "обзора» на странице «Графика», но с большим пределом. Дальше 777 ярдов, предела "
+                        .. "оригинального клиента, дополнительное расстояние видно с современным туманом; "
+                        .. "с оригинальным туманом его скрывает туман зоны.\n\n"
+                        .. "Чем дальше, тем больше памяти, загрузки и работы видеокарты.",
+                    LIGHTING_QUALITY =
+                        "Задаёт тени персонажей, мира и огней внутри и снаружи помещений; "
+                        .. "динамическое освещение помещений; лунные тени; объёмный туман; качество воды; свечение лавы; яркость огня и заклинаний; "
+                        .. "мерцание огня; темноту ночи и помещений. «Низкое», «Среднее» и «Высокое» "
+                        .. "также задают разрешение теней; «Среднее» и «Высокое» — число карт теней "
+                        .. "от огней и число огней с тенями движущихся объектов.\n\n"
+                        .. "«Выкл.» возвращает вид оригинального клиента: классическая вода, без объёмного тумана, свечения лавы и созданных из пламени "
+                        .. "источников света, с коэффициентами яркости ночи и помещений 1.0. "
+                        .. "Все остальные настройки, включая дальность теней и мягкость теней от огня, "
+                        .. "сохраняют ваши значения. «Низкое», «Среднее» и «Высокое» используют улучшенную воду; "
+                        .. "зеркальные отражения включаются отдельно. «Ультра» также поднимает разрешение теней "
+                        .. "до 4096 и число теней от огней до 16 и 8, а вода и объёмный туман — «Высокое». "
+                        .. "Изменение настройки набора показывает «Своё», "
+                        .. "если ни один набор больше не совпадает.",
+                    -- MONKEY (post): localised bloom effect and Off contract.
+                    BLOOM =
+                        "Добавляет мягкое сияние огню, лаве, заклинаниям и освещённым окнам. Низкое качество использует короткое размытие, высокое — более плавное. Выключение сохраняет исходное изображение.",
+                    SUN_SHAFTS =
+                        "Показывает солнечные лучи сквозь деревья и здания. Рельеф и здания перекрывают свет; ночью и в помещениях эффект исчезает.",
+                    COLOR_GRADING =
+                        "Применяет мягкую цветовую палитру зоны и плавно меняет дневной вариант на ночной. Интерфейс не изменяется.",
+                    -- MONKEY (volumetric fog): localised effect and cost explanation.
+                    VOLUMETRIC_FOG =
+                        "Выкл отключает объёмный туман. Низкое добавляет дымку вблизи и лучи солнца или луны с меньшим числом шагов; Высокое использует больше шагов для более плавных лучей. Туман гуще на рассвете и в непогоду, а в помещениях слабее. Для лучей нужны тени; без теней остаётся только дымка.",
+                    -- MONKEY (sky): what each sky tier adds.
+                    SKY_QUALITY =
+                        "«Классическое» — небо оригинального клиента. «Улучшенное» сглаживает "
+                        .. "цветовой переход неба, добавляет мягкое сияние вокруг солнца и звёздное "
+                        .. "ночное небо с Млечным Путём. «Высокое» также добавляет облакам мелкие "
+                        .. "детали и освещённые солнцем края. Почти не влияет на производительность.",
+                    -- MONKEY (skybox): what the zone skybox row changes.
+                    ZONE_SKYBOXES =
+                        "Рисует нарисованное небо, заданное освещением зоны, как в поздних дополнениях: "
+                        .. "вулканическое небо Пылающих степей, чужое небо Выжженных земель "
+                        .. "и звёздную ночь над горой Хиджал, с плавным появлением на границе зоны. "
+                        .. "«Выкл.» оставляет небо оригинального клиента везде, кроме неба призрака и подземелий. Почти бесплатно.",
+                    WATER_QUALITY =
+                        "«Классическое» — вода оригинального клиента. «Улучшенное» добавляет плавные переходы у берегов, "
+                        .. "анимированную пену у берегов и вокруг объектов, подвижные блики на волнах, отражение неба "
+                        .. "и блики от источников света. «Высокое» также добавляет зеркальные отражения и требует больше всего ресурсов.",
+                    LAVA_GLOW =
+                        "Насколько сильно лава освещает всё вокруг. При 0 свечение отключено.",
+                    CHARACTER_SHADOWS =
+                        "Рисует настоящие динамические силуэты игроков, НИП, существ и ездовых "
+                        .. "животных вместо старого овального пятна. Соответствует уровню теней "
+                        .. "персонажей из Wrath. Требует дополнительного времени и памяти "
+                        .. "видеокарты.",
+                    WORLD_SHADOWS =
+                        "Заставляет статичный мир — деревья, здания и растительность — "
+                        .. "отбрасывать настоящие динамические тени вслед за солнцем и отключает "
+                        .. "запечённые тени ландшафта, которые они заменяют. Не зависит от "
+                        .. "настоящих теней персонажей. Требует дополнительного времени и памяти "
+                        .. "видеокарты.",
+                    SHADOW_DISTANCE =
+                        "Как далеко рисуются тени в реальном времени, в ярдах. Большее значение "
+                        .. "покрывает больше земли, но растягивает карту теней тоньше (края "
+                        .. "становятся мягче) и стоит дороже. Применяется по кнопке «Применить».",
+                    SHADOW_RESOLUTION =
+                        "Размер карты теней солнца в текселях. Чем больше, тем чётче тени на "
+                        .. "всей дальности их прорисовки.\n\n"
+                        .. "Стоимость растёт квадратично: 4096 — это вчетверо больше работы в "
+                        .. "проходе теней и вчетверо больше видеопамяти под карту глубины, чем "
+                        .. "2048.",
+                    MOON_SHADOWS =
+                        "Насколько тёмной может стать тень, отбрасываемая лунным светом. "
+                        .. "Немного — и ночь перестаёт выглядеть плоской; много — это "
+                        .. "стилизованная луна, какой в оригинальном клиенте не было.\n\n"
+                        .. "При 0 луна не отбрасывает теней вовсе, и ночь выглядит так же, как "
+                        .. "до появления этой возможности. Днём не стоит ничего.",
+                    INTERIOR_LIGHT =
+                        "Освещает помещения от ламп, свечей и очагов, которые действительно "
+                        .. "стоят в комнате, а не от освещения, запечённого в стенах.\n\n"
+                        .. "«Выкл.» возвращает запечённые интерьеры оригинального клиента. "
+                        .. "Включённый режим стоит немного времени видеокарты на каждую "
+                        .. "освещённую поверхность. Тени от огней внутри требуют этого режима; "
+                        .. "тени от огней снаружи работают независимо.",
+                    INTERIOR_SHADOWS =
+                        "Позволяет ближайшим огням в помещении отбрасывать настоящие тени: "
+                        .. "свеча кладёт тень стола на пол.\n\n"
+                        .. "Каждый такой огонь стоит собственной карты теней, поэтому это самая "
+                        .. "дорогая строка на странице. Требует динамического освещения "
+                        .. "помещений.",
+                    EXTERIOR_SHADOWS =
+                        "То же для огней под открытым небом: костры, жаровни и фонари "
+                        .. "отбрасывают настоящие тени после наступления темноты.\n\n"
+                        .. "Днём не действует и не требует динамического освещения помещений.",
+                    TORCH_TERRAIN_SHADOWS =
+                        "Земля сама участвует в тенях от огней снаружи: холм или склон между "
+                        .. "костром и местностью за ним заслоняет свет огня.\n\n"
+                        .. "Добавляет ближний рельеф в карту теней каждого уличного огня при её "
+                        .. "перестройке; затраты на кадр невелики. Требует теней огней под "
+                        .. "открытым небом.",
+                    TORCH_SOFT =
+                        "Насколько мягок край тени от огня там, где предмет касается пола. "
+                        .. "Низкое значение — резкий край, высокое — размытый, как от "
+                        .. "настоящего пламени.\n\n"
+                        .. "Дополнительных карт теней не требует: это лишь более широкий фильтр "
+                        .. "по уже нарисованным.",
+                    FIRE_LIGHT =
+                        "Насколько ярко костры, факелы, жаровни и горны освещают всё вокруг. "
+                        .. "Эти источники benilla создаёт из самого пламени — в оригинальной "
+                        .. "графике их нет.\n\n"
+                        .. "При 0 придуманные огни выключены и остаются лишь источники, "
+                        .. "расставленные художниками. Изменение значения ничего не стоит.",
+                    FIRE_FLICKER =
+                        "Насколько сильно «дышит» свет каждого пламени: свечи — часто и слабо, "
+                        .. "костры — медленно и ровно.\n\n"
+                        .. "При 0 огни горят с постоянной яркостью, как было до появления этой "
+                        .. "возможности. Считается на процессоре и ничего не стоит видеокарте.",
+                    SPELL_LIGHTS =
+                        "Насколько ярко заклинания, снаряды и попадания освещают всё вокруг: "
+                        .. "вспышка огненного шара, свечение ауры.\n\n"
+                        .. "Отделено от яркости огня намеренно: успокоить шумный бой не должно "
+                        .. "значить пригасить очаги во всём мире. При 0 заклинания не дают "
+                        .. "света.",
+                    NIGHT_DARKNESS =
+                        "Насколько темно становится под открытым небом после заката. "
+                        .. "1.0 — ночь оригинального клиента; ниже — темнее.\n\n"
+                        .. "Огней не касается: смысл в том, чтобы ночь вокруг пламени была "
+                        .. "темнее, а не само пламя тусклее. Пока солнце в небе, не действует, и "
+                        .. "ничего не стоит при любом значении.",
+                    INTERIOR_DARKNESS =
+                        "Масштабирует свет светильников и фоновое освещение помещений, включая "
+                        .. "свет ламп и свечей. Меньшие значения ослабляют и то и другое.\n\n"
+                        .. "1.0 оставляет эти составляющие без изменений. Ничего не стоит при любом значении.",
+                    -- MONKEY (p0 skyDither)
+                    SKY_DITHER =
+                        "Добавляет едва заметный шум в итоговое изображение, чтобы плавные переходы цвета "
+                        .. "неба и тумана не распадались на полосы. Выключено — вид оригинального клиента. "
+                        .. "Почти ничего не стоит.",
+                    -- MONKEY (fog)
+                    FOG_MODEL =
+                        "Более мягкий туман в духе современного клиента: он сгущается постепенно, а не "
+                        .. "по прямой, днём светлеет в сторону солнца, а вдали принимает цвет неба, "
+                        .. "так что земля растворяется в горизонте. Дальность тумана в каждой зоне "
+                        .. "прежняя; за пределом дальности обзора оригинала туман отступает вместе с ней."
+                        .. "\n\nВыключено — туман оригинального клиента. Почти ничего не стоит.",
+                    -- MONKEY (wet)
+                    RAIN_SURFACES =
+                        "Дождь постепенно намачивает землю, камень и дерево под открытым небом: они темнеют, "
+                        .. "на ровной земле собираются лужи, мокрые поверхности блестят, а капли расходятся "
+                        .. "кругами по воде. После дождя всё высыхает за несколько минут. Выключено — вид "
+                        .. "оригинального клиента. Почти ничего не стоит и работает, только пока всё мокрое.",
+                -- MONKEY (wind)
+                    FOLIAGE_WIND =
+                        "Трава гнётся двумя бегущими волнами ветра и расступается вокруг персонажей. "
+                        .. "Трава + деревья также добавляет мягкое качание листвы деревьев и кустов.\n\n"
+                        .. "Выключено не смещает вершины и восстанавливает исходный вид. Тени деревьев остаются неподвижными.",
+                    -- MONKEY (fix-wind)
+                    FOLIAGE_WIND_STRENGTH =
+                        "Насколько сильно трава и листва качаются на ветру. 100% — обычное качание; меньше — "
+                        .. "спокойнее, больше — ветреный день. В грозу всё качается ещё сильнее. "
+                        .. "Трава по-прежнему расступается вокруг персонажей. Работает, если включён ветер листвы.",
+                    -- MONKEY (ao): Russian contact-shadow explanation.
+                    AMBIENT_OCCLUSION =
+                        "Мягкие контактные тени там, где поверхности соприкасаются: под предметами и мебелью, "
+                        .. "в углах между стенами и полом, у ног персонажей. «Низкое» использует меньше выборок; "
+                        .. "«Высокое» — более плавное и захватывает чуть больше.\n\n"
+                        .. "Ослабевает с расстоянием и не затрагивает небо, воду, освещённые окна и пламя. "
+                        .. "«Выкл» оставляет изображение без изменений.",
+                    -- MONKEY (integration): daylight window split.
+                    DAYLIGHT_WINDOW_SPLIT =
+                        "Большие городские здания пропускают дневной свет через каждое окно отдельно, "
+                        .. "а не через всю стену окон как один проём, поэтому залы вроде собора "
+                        .. "освещаются солнцем окно за окном.\n\nДействует для зданий, загруженных после "
+                        .. "изменения. Выключено — прежний вид.",
+                    -- MONKEY (lampfog)
+                    LAMP_FOG =
+                        "После заката ближайшие фонари и огни светятся сквозь воздух. Низкое "
+                        .. "качество использует 16 ближайших источников, высокое — 32. Дождь и туман усиливают ореолы. "
+                        .. "Эффект не рассчитывает тени, но обрывается на видимой глубине.\n\n"
+                        .. "Выключено — без изменений; днём изображение не меняется при любом значении.",
+                    -- GFX (volumetric light)
+                    VOLUMETRIC_LIGHT =
+                        "Солнечный и лунный свет виден в воздухе лучами: сквозь кроны деревьев, между "
+                        .. "зданиями и рядом с персонажем, по настоящим теням. Гуще на рассвете, в тумане "
+                        .. "и под дождём. Нужны тени мира или реальные тени персонажей; в помещениях не "
+                        .. "рисуется.\n\n"
+                        .. "«Среднее» использует меньше выборок, «Высокое» — более плавное. Выключено — "
+                        .. "без изменений.",
+                    VOLUMETRIC_LIGHT_STRENGTH =
+                        "Яркость лучей объёмного света. 100% — по умолчанию; 0 скрывает их.",
+                    -- GFX (moonlight)
+                    MOONLIGHT =
+                        "Луна освещает мир ночью: холодный тусклый свет с того места, где луна "
+                        .. "действительно стоит на небе, поверх исходных ночных цветов, с лунными тенями, "
+                        .. "если «Лунные тени» больше 0.\n\n"
+                        .. "При 0 ночь выглядит точно так же, как в оригинальном клиенте. Днём не стоит ничего.",
+                },
+            },
+        }
+
+        -- The selected column. `or` the English one so an unbuilt locale is a fallback rather
+        -- than fifteen rows of `nil` labels — 1.12's own GlobalStrings do the same thing by
+        -- shipping one file per locale with every key present.
+        BENILLA_ADVGFX = BENILLA_ADVGFX_STRINGS[GetLocale()] or BENILLA_ADVGFX_STRINGS.enUS
+
+        -- A row's description resolves by GLOBAL NAME at hover time (`BenillaOptionsRow_ShowTooltip`), so
+        -- the selected column's copy is published under the key the row carries. Same `BENILLA_`
+        -- prefix the four rows above use, and for the same reason: the reference's
+        -- `OPTION_TOOLTIP_` namespace stays the reference's.
+        for key, text in pairs(BENILLA_ADVGFX.tips) do
+            setglobal("BENILLA_TOOLTIP_" .. key, text)
+        end
+
         BENILLA_OPTIONS_PAGE_ROWS = {
             -- The era Controls order first; the rest follow their 1.12 box's columns.
             Controls = {
@@ -451,7 +1034,54 @@
             Graphics = {
                 "RowUiScale", "RowFarclip", "RowWorldDetail", "RowSpellDetail", "RowBrightness",
                 "RowWeatherDensity",
-                "RowDisplayMode", "RowVerticalSync", "RowRenderScale",
+                "RowDisplayMode", "RowVerticalSync",
+                "RowRenderScale",
+            },
+            -- MONKEY (advanced graphics): the dynamic light + shadow system's own page. Order is
+            -- the preset first (it writes the rest), then the SUN lanes, then the ROOM lane and
+            -- its torches, then the invented lights, then the two darkness dials — coarse to
+            -- fine, and each group's own master above the rows it gates.
+            --
+            -- Real Character Shadows, World Shadows and Shadow Distance MOVED here from Graphics,
+            -- carrying their CVars and their descriptions unchanged: they belong with the rest of
+            -- the rig they share, and the Graphics page had become the place where a player found
+            -- three of eighteen shadow settings and no hint that the other fifteen existed.
+            AdvancedGraphics = {
+                -- MONKEY (presets): the ladder over every row below, then the view distance.
+                "RowGraphicsQuality", "RowRenderDistance",
+                -- MONKEY (volumetric fog): include in refresh, defaults and search.
+                "RowLightingQuality", "RowWaterQuality", "RowVolumetricFog",
+                -- MONKEY (sky): the sky tier row.
+                "RowSkyQuality",
+                -- MONKEY (post): the world-only screen effects.
+                "RowBloom", "RowSunShafts", "RowColorGrading",
+                "RowCharacterShadows", "RowWorldShadows", "RowShadowDistance",
+                "RowShadowResolution", "RowMoonShadows",
+                "RowInteriorLight", "RowInteriorShadows", "RowExteriorShadows",
+                -- MONKEY (daylight: terrain torch casters)
+                "RowTorchTerrainShadows", "RowTorchSoft",
+                "RowFireLight", "RowFireFlicker", "RowSpellLights", "RowLavaGlow",
+                "RowNightDarkness", "RowInteriorDarkness",
+                -- MONKEY (p0 skyDither)
+                "RowSkyDither",
+                -- MONKEY (fog)
+                "RowFogModel",
+                -- MONKEY (wet)
+                "RowRainSurfaces",
+                -- MONKEY (wind): appended for conflict-free lane merges.
+                "RowFoliageWind",
+                -- MONKEY (fix-wind): the sway strength, right under its tier.
+                "RowFoliageWindStrength",
+                -- MONKEY (ao): appended so the other rows keep their indices.
+                "RowAmbientOcclusion",
+                -- MONKEY (lampfog)
+                "RowLampFog",
+                -- MONKEY (integration): daylight window split.
+                "RowDaylightWindowSplit",
+                -- MONKEY (integration): the skybox lane's row (the lane left it out of this list).
+                "RowZoneSkyboxes",
+                -- GFX (volumetric light) / (moonlight): appended so the other rows keep their indices.
+                "RowVolumetricLight", "RowVolumetricLightStrength", "RowMoonLight",
             },
             -- Guild Names is a child of Player Names (UIOptionsFrame.lua:703-709).
             Nameplates = {
@@ -704,9 +1334,31 @@
                 return string.format("%d%%",
                     math.floor((value - row.minv) / (row.maxv - row.minv) * 100 + 0.5))
             end
+            -- MONKEY (advanced graphics): travel, READ BACKWARDS — the same share of the groove,
+            -- counted from the right-hand end. The two darkness dials are the case: their stored
+            -- unit is a GAIN (`nightGain`, `interiorGain`), so the darkest setting is the SMALLEST
+            -- number and sits at the left of the groove, while the row is named for the darkness
+            -- rather than the gain. Without this the readout would count UP as the world got
+            -- LIGHTER under a label that says "Darkness", which is exactly backwards; with it the
+            -- label, the thumb and the number all agree that further left is darker. The store
+            -- keeps the gain, unchanged — this is a readout, not a unit.
+            if row.fmt == "darkness" and row.minv and row.maxv and row.maxv > row.minv then
+                return string.format("%d%%",
+                    math.floor((row.maxv - value) / (row.maxv - row.minv) * 100 + 0.5))
+            end
             -- "yards": cameraDistanceMaxFactor over the 15 yd base.
             if row.fmt == "yards" then
-                return string.format("%d yd", math.floor(value * 15 + 0.5))
+                return string.format(BENILLA_ADVGFX.yards, math.floor(value * 15 + 0.5))
+            end
+            -- MONKEY (advanced graphics): a row whose stored value ALREADY IS a distance in yards
+            -- — the realtime-shadow range. Its own format, because the one above it is a
+            -- CONVERSION and not a unit: `shadowDistance` rode `"yards"` from the day it was
+            -- seated, so an 80-yard cascade printed "1200 yd" and nothing caught it (no test read
+            -- that readout, and 1200 is not an absurd-looking number for a view distance). The
+            -- two formats differ by exactly the factor's 15 yd base, which is why they cannot be
+            -- one.
+            if row.fmt == "yd" then
+                return string.format(BENILLA_ADVGFX.yards, math.floor(value + 0.5))
             end
             return string.format("%d%%", math.floor(value * 100 + 0.5))
         end
@@ -825,6 +1477,47 @@
             BenillaOptionsApply_Update()
         end
 
+        -- ── MONKEY (advanced graphics): the page that has to WATCH its settings ─────────────
+        -- Every other page in this window owns its rows outright: nothing but a click on the page
+        -- moves the CVars behind it while it is open, so reading them once on select is the whole
+        -- contract. The lighting rows are not like that, and deliberately so — they are the live
+        -- A/B knobs the whole system was tuned with, and there are three other ways to move one
+        -- with this page on screen: `/console set nightGain 1` in chat, the native lighting panel
+        -- in a dev build, and — the one that matters to a player — the Lighting Quality row above,
+        -- which does not write its members here at all. It writes ONE CVar; the host's preset
+        -- table answers by writing the other ten, and those land a frame or two later.
+        --
+        -- So the page polls. A cheap signature of its own rows' values, four times a second, and a
+        -- refresh only when that string actually moves — which is never, on a page nobody is
+        -- touching. The alternative (an event) does not exist: a host-side CVar write reaches the
+        -- interface as a mirror update, not as `CVAR_UPDATE`, which the reference only ever fires
+        -- for a script's own `SetCVar` with a token.
+        --
+        -- Safe under a drag, and not by luck: the value the refresh would write back is the value
+        -- the drag just wrote, `SetValue` fires nothing when it does not change the value, and the
+        -- `refreshing` guard stops a write even if it did. A staged (deferred) edit is safe too —
+        -- `BenillaOptionsPage_Refresh` shows `row.pending` ahead of the stored value.
+        BENILLA_ADVGFX_POLL = 0.25
+
+        function AdvGfx_Signature()
+            local out = ""
+            for _, rkey in ipairs(BENILLA_OPTIONS_PAGE_ROWS.AdvancedGraphics) do
+                local row = getglobal("BenillaOptionsFrameContainerBodyAdvancedGraphics" .. rkey)
+                out = out .. "|" .. (BenillaOptionsRow_Get(row) or "")
+            end
+            return out
+        end
+
+        function AdvGfx_OnUpdate(page, elapsed)
+            page.since = (page.since or 0) + (elapsed or 0)
+            if page.since < BENILLA_ADVGFX_POLL then return end
+            page.since = 0
+            local sig = AdvGfx_Signature()
+            if sig == page.sig then return end
+            page.sig = sig
+            BenillaOptionsPage_Refresh("AdvancedGraphics")
+        end
+
         -- Each page's dependency rules, the 1.12 panel's own.
         function BenillaOptionsPage_UpdateDependencies(key)
             if key == "Combat" then
@@ -849,6 +1542,33 @@
                 local dmg = GetCVar("CombatDamage") ~= "0"
                 BenillaOptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyCombatRowPeriodicDamage, dmg)
                 BenillaOptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyCombatRowPetDamage, dmg)
+                return
+            end
+            if key == "AdvancedGraphics" then
+                -- MONKEY (advanced graphics): the page's own dependencies — the same shape the
+                -- reference's own rules have (a master's own switch greys what it gates), read
+                -- off the CVar docs rather than invented: `interiorShadows` "needs
+                -- interiorLight", the two shadow-rig rows size a cascade that is not rendered
+                -- with both sun lanes off, and the torch softness is the PCF radius on maps
+                -- neither torch lane is drawing. The CVars keep their values throughout — this
+                -- is a dependency, not a write, so turning a master back on finds its children
+                -- exactly where they were left.
+                local base = "BenillaOptionsFrameContainerBodyAdvancedGraphics"
+                local sun = GetCVar("characterShadows") ~= "0"
+                    or GetCVar("worldShadows") ~= "0"
+                BenillaOptionsRow_SetEnabled(getglobal(base .. "RowShadowDistance"), sun)
+                BenillaOptionsRow_SetEnabled(getglobal(base .. "RowShadowResolution"), sun)
+                local interior = GetCVar("interiorLight") ~= "0"
+                BenillaOptionsRow_SetEnabled(getglobal(base .. "RowInteriorShadows"), interior)
+                local torch = (interior and GetCVar("interiorShadows") ~= "0")
+                    or GetCVar("exteriorShadows") ~= "0"
+                BenillaOptionsRow_SetEnabled(getglobal(base .. "RowTorchSoft"), torch)
+                -- MONKEY (daylight: terrain torch casters): the ground only casts for outdoor fires.
+                BenillaOptionsRow_SetEnabled(getglobal(base .. "RowTorchTerrainShadows"),
+                    GetCVar("exteriorShadows") ~= "0")
+                -- MONKEY (fix-wind): the strength only matters while some foliage sways.
+                BenillaOptionsRow_SetEnabled(getglobal(base .. "RowFoliageWindStrength"),
+                    GetCVar("foliageWind") ~= "0")
                 return
             end
             if key == "Controls" then
@@ -939,7 +1659,20 @@
             for _, rkey in ipairs(BENILLA_OPTIONS_PAGE_ROWS[key]) do
                 local row = getglobal(base .. rkey)
                 row.pending = nil
-                BenillaOptionsRow_Set(row, BenillaOptionsRow_Default(row))
+                if not row.preset then
+                    BenillaOptionsRow_Set(row, BenillaOptionsRow_Default(row))
+                end
+            end
+            -- MONKEY (presets): a preset row goes last, so its default rung (the Graphics
+            -- Preset's High) is what the page lands on rather than its members' own defaults.
+            -- `SetCVar` queues only a moved value, so "Custom" (which the host applies as
+            -- nothing) goes first: the rung is then always a queued write, after the members.
+            for _, rkey in ipairs(BENILLA_OPTIONS_PAGE_ROWS[key]) do
+                local row = getglobal(base .. rkey)
+                if row.preset then
+                    BenillaOptionsRow_Set(row, "Custom")
+                    BenillaOptionsRow_Set(row, BenillaOptionsRow_Default(row))
+                end
             end
             BenillaOptionsPage_Refresh(key)
         end
@@ -1437,8 +2170,16 @@
                         <Anchors><Anchor point="TOPLEFT" relativeTo="$parentHeaderSystem" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors>
                         <Scripts><OnLoad>BenillaOptionsCategoryRow_OnLoad(this, "Graphics", "Graphics")</OnLoad></Scripts>
                     </Button>
-                    <Button name="$parentRowAudio" inherits="BenillaOptionsCategoryRowTemplate">
+                    <!-- MONKEY (advanced graphics): under Graphics, which is what it refines. Its
+                         label is the one category label in this tree that is not a literal — the
+                         page is bilingual, so the row (and the page title it doubles as) reads
+                         the selected column like every other string on it. -->
+                    <Button name="$parentRowAdvancedGraphics" inherits="BenillaOptionsCategoryRowTemplate">
                         <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRowGraphics" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors>
+                        <Scripts><OnLoad>BenillaOptionsCategoryRow_OnLoad(this, "AdvancedGraphics", BENILLA_ADVGFX.page)</OnLoad></Scripts>
+                    </Button>
+                    <Button name="$parentRowAudio" inherits="BenillaOptionsCategoryRowTemplate">
+                        <Anchors><Anchor point="TOPLEFT" relativeTo="$parentRowAdvancedGraphics" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-2"/></Offset></Anchor></Anchors>
                         <Scripts><OnLoad>BenillaOptionsCategoryRow_OnLoad(this, "Audio", "Audio")</OnLoad></Scripts>
                     </Button>
                 </Frames>
@@ -1972,6 +2713,13 @@
                                                     "OPTION_TOOLTIP_VERTICAL_SYNC")
                                             </OnLoad></Scripts>
                                         </Frame>
+                                        <!-- MONKEY (advanced graphics): Real Character Shadows,
+                                             World Shadows and Shadow Distance stood here between
+                                             Vertical Sync and Render Scale. They are the Advanced
+                                             Graphics page's now, unchanged — same CVars, same
+                                             labels, same descriptions, same deferred commit on the
+                                             slider — because they are three rows of one rig whose
+                                             other fifteen a player could not reach at all. -->
                                         <Frame name="$parentRowRenderScale" inherits="BenillaOptionsSliderRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowVerticalSync" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2002,6 +2750,603 @@
                                                 end
                                             end
                                         </OnShow>
+                                    </Scripts>
+                                </Frame>
+                                <!-- ══ MONKEY (advanced graphics): the ADVANCED GRAPHICS page ═══
+                                     The dynamic light and shadow system, as a page a player can
+                                     reach. Nothing here is a new mechanism: every row is a seat on
+                                     a CVar this client already registers, reads per frame and
+                                     persists, and the page is built out of the same three row
+                                     templates and the same BenillaOptionsRow_* store as every page above
+                                     it. What it adds is a way in — before it, a player build had
+                                     none, because the native lighting panel is a dev-build window
+                                     and `/console` is not a setting.
+
+                                     Order is coarse to fine, and each master sits above what it
+                                     gates: the preset (which writes the rest), the sun rig, the
+                                     room lane with its torches, the invented lights, the two
+                                     darkness dials. The three rows that moved here from Graphics
+                                     keep their CVars, labels, descriptions and — on Shadow
+                                     Distance — the deferred commit, verbatim.
+
+                                     Every label and description is bilingual (BENILLA_ADVGFX);
+                                     every VALUE written stays the engine's own string. -->
+                                <Frame name="$parentAdvancedGraphics" hidden="true">
+                                    <Anchors>
+                                        <Anchor point="TOPLEFT"/>
+                                        <Anchor point="BOTTOMRIGHT"/>
+                                    </Anchors>
+                                    <Frames>
+                                        <!-- MONKEY (presets): the Graphics Preset. Like Lighting
+                                             Quality below it, ONE CVar: the host's
+                                             `cvars::GRAPHICS_PRESETS` writes the rows and
+                                             re-derives this one every frame. -->
+                                        <Frame name="$parentRowGraphicsQuality" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT"><Offset><AbsDimension x="10" y="-12"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT"><Offset><AbsDimension x="-20" y="-12"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "graphicsQuality",
+                                                    BENILLA_ADVGFX.graphicsQuality,
+                                                    "BENILLA_TOOLTIP_GRAPHICS_QUALITY")
+                                                this.preset = 1
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.pClassic, value = "Classic" },
+                                                    { text = BENILLA_ADVGFX.qLow, value = "Low" },
+                                                    { text = BENILLA_ADVGFX.qMedium, value = "Medium" },
+                                                    { text = BENILLA_ADVGFX.qHigh, value = "High" },
+                                                    { text = BENILLA_ADVGFX.qUltra, value = "Ultra" },
+                                                    { text = BENILLA_ADVGFX.qCustom, value = "Custom" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (presets): `farclip`, the Graphics page's Terrain
+                                             Distance, on the extended range (`view::FARCLIP_RANGE`,
+                                             177..1497 on the 1.12 grid of 60). Live like its
+                                             Graphics twin; both read the one CVar. -->
+                                        <Frame name="$parentRowRenderDistance" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowGraphicsQuality" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowGraphicsQuality" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "farclip",
+                                                    BENILLA_ADVGFX.renderDistance,
+                                                    "BENILLA_TOOLTIP_RENDER_DISTANCE")
+                                                BenillaOptionsSliderRow_Setup(this, 177, 1497, 60, "yd")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowLightingQuality" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowRenderDistance" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowRenderDistance" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- The preset ladder. This row writes ONE CVar and
+                                                -- nothing else: the host's own table
+                                                -- (`cvars::LIGHTING_PRESETS`) answers the write by
+                                                -- setting the member rows, and re-derives this
+                                                -- row's value from them every frame — which is why
+                                                -- Custom is an entry the capsule can SHOW but
+                                                -- picking it writes nothing anyone keeps.
+                                                --
+                                                -- The table is deliberately NOT here. Three other
+                                                -- ways reach the same ladder (the console, the
+                                                -- native lighting panel, a hand-edited
+                                                -- config.toml), and a copy carried by this window
+                                                -- would be a copy the other three cannot see.
+                                                -- The page's OnUpdate poll is what brings the
+                                                -- member rows' new values back onto the screen.
+                                                BenillaOptionsRow_OnLoad(this, "lightingQuality",
+                                                    BENILLA_ADVGFX.lightingQuality,
+                                                    "BENILLA_TOOLTIP_LIGHTING_QUALITY")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.qOff, value = "Off" },
+                                                    { text = BENILLA_ADVGFX.qLow, value = "Low" },
+                                                    { text = BENILLA_ADVGFX.qMedium, value = "Medium" },
+                                                    { text = BENILLA_ADVGFX.qHigh, value = "High" },
+                                                    { text = BENILLA_ADVGFX.qUltra, value = "Ultra" },
+                                                    { text = BENILLA_ADVGFX.qCustom, value = "Custom" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowWaterQuality" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowLightingQuality" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowLightingQuality" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "waterQuality",
+                                                    BENILLA_ADVGFX.waterQuality,
+                                                    "BENILLA_TOOLTIP_WATER_QUALITY")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.waterClassic, value = "0" },
+                                                    { text = BENILLA_ADVGFX.waterEnhanced, value = "1" },
+                                                    { text = BENILLA_ADVGFX.waterHigh, value = "2" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (volumetric fog): live numeric tiers use the existing localised dropdown. -->
+                                        <Frame name="$parentRowVolumetricFog" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowWaterQuality" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowWaterQuality" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "volumetricFog", BENILLA_ADVGFX.volumetricFog,
+                                                    "BENILLA_TOOLTIP_VOLUMETRIC_FOG")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.fogOff, value = "0" },
+                                                    { text = BENILLA_ADVGFX.qLow, value = "1" },
+                                                    { text = BENILLA_ADVGFX.qHigh, value = "2" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (sky): the sky tier, Classic / Enhanced / High. -->
+                                        <Frame name="$parentRowSkyQuality" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowVolumetricFog" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowVolumetricFog" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "skyQuality", BENILLA_ADVGFX.skyQuality,
+                                                    "BENILLA_TOOLTIP_SKY_QUALITY")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.waterClassic, value = "0" },
+                                                    { text = BENILLA_ADVGFX.waterEnhanced, value = "1" },
+                                                    { text = BENILLA_ADVGFX.waterHigh, value = "2" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (post): live HDR/bloom tier; Off is the baseline. -->
+                                        <Frame name="$parentRowBloom" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowSkyQuality" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowSkyQuality" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "bloom", BENILLA_ADVGFX.bloom,
+                                                    "BENILLA_TOOLTIP_BLOOM")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.fogOff, value = "0" },
+                                                    { text = BENILLA_ADVGFX.qLow, value = "1" },
+                                                    { text = BENILLA_ADVGFX.qHigh, value = "2" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (post): depth-occluded radial sunlight, world only. -->
+                                        <Frame name="$parentRowSunShafts" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowBloom" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowBloom" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "sunShafts", BENILLA_ADVGFX.sunShafts,
+                                                    "BENILLA_TOOLTIP_SUN_SHAFTS")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (post): zone/day-night 32-cube grade, world only. -->
+                                        <Frame name="$parentRowColorGrading" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowSunShafts" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowSunShafts" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "colorGrading", BENILLA_ADVGFX.colorGrading,
+                                                    "BENILLA_TOOLTIP_COLOR_GRADING")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowCharacterShadows" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <!-- MONKEY (post): screen effects sit immediately above this one. -->
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowColorGrading" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowColorGrading" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "characterShadows",
+                                                    BENILLA_ADVGFX.characterShadows,
+                                                    "BENILLA_TOOLTIP_CHARACTER_SHADOWS")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowWorldShadows" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowCharacterShadows" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowCharacterShadows" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "worldShadows",
+                                                    BENILLA_ADVGFX.worldShadows,
+                                                    "BENILLA_TOOLTIP_WORLD_SHADOWS")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowShadowDistance" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowWorldShadows" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowWorldShadows" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- Realtime-shadow render distance (yd): the cascade
+                                                -- range + caster reach. 40-200, matching the CVar's
+                                                -- own clamp (SHADOW_DISTANCE_RANGE). DEFERRED to
+                                                -- Apply so a drag doesn't re-fit the cascade + recollect
+                                                -- casters on every tick (one rebuild on commit instead).
+                                                BenillaOptionsRow_OnLoad(this, "shadowDistance",
+                                                    BENILLA_ADVGFX.shadowDistance,
+                                                    "BENILLA_TOOLTIP_SHADOW_DISTANCE")
+                                                -- `"yd"`, not `"yards"`: the value is already a
+                                                -- distance in yards, where the format beside it
+                                                -- multiplies a FACTOR by the 15 yd camera base.
+                                                -- This row rode the wrong one from the day it was
+                                                -- seated and printed "1200 yd" for an 80 yd
+                                                -- cascade.
+                                                BenillaOptionsSliderRow_Setup(this, 40, 200, 10, "yd")
+                                                this.deferred = 1
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowShadowResolution" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowShadowDistance" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowShadowDistance" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- The three stops the CVar's own snap accepts
+                                                -- (`shadow_core::SHADOW_MAP_SIZES`): a dropdown
+                                                -- rather than a slider because an off-ladder value
+                                                -- is not a weaker setting, it is one the renderer
+                                                -- rounds UP into a bigger and slower map than the
+                                                -- one that was asked for. The entry texts are the
+                                                -- numbers themselves — nothing to translate.
+                                                BenillaOptionsRow_OnLoad(this, "shadowMapSize",
+                                                    BENILLA_ADVGFX.shadowResolution,
+                                                    "BENILLA_TOOLTIP_SHADOW_RESOLUTION")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = "1024", value = "1024" },
+                                                    { text = "2048", value = "2048" },
+                                                    { text = "4096", value = "4096" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowMoonShadows" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowShadowResolution" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowShadowResolution" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- 0..1, the CVar's own clamp, and 0 is the FAITHFUL
+                                                -- null rather than a floor: every consumer guards
+                                                -- on it, so the left end of this groove is the
+                                                -- night the client rendered before the moon lane
+                                                -- existed.
+                                                BenillaOptionsRow_OnLoad(this, "moonShadowStrength",
+                                                    BENILLA_ADVGFX.moonShadows,
+                                                    "BENILLA_TOOLTIP_MOON_SHADOWS")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 1, 0.05)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowInteriorLight" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowMoonShadows" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowMoonShadows" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "interiorLight",
+                                                    BENILLA_ADVGFX.interiorLight,
+                                                    "BENILLA_TOOLTIP_INTERIOR_LIGHT")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowInteriorShadows" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowInteriorLight" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowInteriorLight" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "interiorShadows",
+                                                    BENILLA_ADVGFX.interiorShadows,
+                                                    "BENILLA_TOOLTIP_INTERIOR_SHADOWS")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowExteriorShadows" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowInteriorShadows" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowInteriorShadows" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "exteriorShadows",
+                                                    BENILLA_ADVGFX.exteriorShadows,
+                                                    "BENILLA_TOOLTIP_EXTERIOR_SHADOWS")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (daylight: terrain torch casters) -->
+                                        <Frame name="$parentRowTorchTerrainShadows" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowExteriorShadows" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowExteriorShadows" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "torchTerrainShadows",
+                                                    BENILLA_ADVGFX.torchTerrainShadows,
+                                                    "BENILLA_TOOLTIP_TORCH_TERRAIN_SHADOWS")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowTorchSoft" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowTorchTerrainShadows" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowTorchTerrainShadows" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- 0.5..3, the CVar's own clamp verbatim: it is a
+                                                -- SCALE on the PCF tap radius at a contact, so the
+                                                -- readout is a percentage of the shipped radius
+                                                -- and 100% is what the lane was tuned at.
+                                                BenillaOptionsRow_OnLoad(this, "interiorShadowSoft",
+                                                    BENILLA_ADVGFX.torchSoft,
+                                                    "BENILLA_TOOLTIP_TORCH_SOFT")
+                                                BenillaOptionsSliderRow_Setup(this, 0.5, 3, 0.1)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowFireLight" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowTorchSoft" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowTorchSoft" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- Full 0..4 registry range, in five-percent steps.
+                                                BenillaOptionsRow_OnLoad(this, "fireLightGain",
+                                                    BENILLA_ADVGFX.fireLight,
+                                                    "BENILLA_TOOLTIP_FIRE_LIGHT")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 4, 0.05)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowFireFlicker" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowFireLight" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowFireLight" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- 0..2, the CVar's own clamp verbatim: the
+                                                -- amplitudes are authored at 100%, and 200% is the
+                                                -- deliberate over-drive for judging the shape.
+                                                BenillaOptionsRow_OnLoad(this, "fireFlicker",
+                                                    BENILLA_ADVGFX.fireFlicker,
+                                                    "BENILLA_TOOLTIP_FIRE_FLICKER")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 2, 0.05)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowSpellLights" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowFireFlicker" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowFireFlicker" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- Full 0..4 registry range, in five-percent steps.
+                                                BenillaOptionsRow_OnLoad(this, "spellLightGain",
+                                                    BENILLA_ADVGFX.spellLights,
+                                                    "BENILLA_TOOLTIP_SPELL_LIGHTS")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 4, 0.05)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowLavaGlow" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowSpellLights" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowSpellLights" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "lavaLightGain",
+                                                    BENILLA_ADVGFX.lavaGlow,
+                                                    "BENILLA_TOOLTIP_LAVA_GLOW")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 4, 0.05)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowNightDarkness" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowLavaGlow" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowLavaGlow" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- 0.2..1.5, the CVar's own clamp verbatim: the
+                                                -- floor is 0.2 rather than 0 because a true 0 is
+                                                -- indistinguishable from a broken light pack, and
+                                                -- the "off" a player wants is the reference's own
+                                                -- night at gain 1.
+                                                --
+                                                -- The readout is `darkness` — travel read from the
+                                                -- right — because the stored unit is a GAIN while
+                                                -- the row is named for the darkness: left is
+                                                -- darker, and this is what makes the number say so
+                                                -- too. The store keeps the gain, untouched.
+                                                BenillaOptionsRow_OnLoad(this, "nightGain",
+                                                    BENILLA_ADVGFX.nightDarkness,
+                                                    "BENILLA_TOOLTIP_NIGHT_DARKNESS")
+                                                BenillaOptionsSliderRow_Setup(this, 0.2, 1.5, 0.05, "darkness")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowInteriorDarkness" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowNightDarkness" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowNightDarkness" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                -- The room lane's own dim dial, same clamp and same
+                                                -- backwards readout as the night one above it.
+                                                BenillaOptionsRow_OnLoad(this, "interiorGain",
+                                                    BENILLA_ADVGFX.interiorDarkness,
+                                                    "BENILLA_TOOLTIP_INTERIOR_DARKNESS")
+                                                BenillaOptionsSliderRow_Setup(this, 0.2, 1.5, 0.05, "darkness")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (p0 skyDither): the combine's deband dither. -->
+                                        <Frame name="$parentRowSkyDither" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowInteriorDarkness" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowInteriorDarkness" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "skyDither",
+                                                    BENILLA_ADVGFX.skyDither,
+                                                    "BENILLA_TOOLTIP_SKY_DITHER")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (fog): the distance-fog model. -->
+                                        <Frame name="$parentRowFogModel" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowSkyDither" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowSkyDither" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "fogModel",
+                                                    BENILLA_ADVGFX.fogModel,
+                                                    "BENILLA_TOOLTIP_FOG_MODEL")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (wet): wet surfaces + rain ripples. -->
+                                        <Frame name="$parentRowRainSurfaces" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowFogModel" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowFogModel" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "rainSurfaces",
+                                                    BENILLA_ADVGFX.rainSurfaces,
+                                                    "BENILLA_TOOLTIP_RAIN_SURFACES")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (wind): three foliage tiers; appended at the end of the page. -->
+                                        <Frame name="$parentRowFoliageWind" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowRainSurfaces" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowRainSurfaces" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "foliageWind",
+                                                    BENILLA_ADVGFX.foliageWind,
+                                                    "BENILLA_TOOLTIP_FOLIAGE_WIND")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.qOff, value = "0" },
+                                                    { text = BENILLA_ADVGFX.windGrass, value = "1" },
+                                                    { text = BENILLA_ADVGFX.windTrees, value = "2" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (fix-wind): the sway gain, 0.25..3 (100% = the shipped tuning). -->
+                                        <Frame name="$parentRowFoliageWindStrength" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowFoliageWind" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowFoliageWind" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "foliageWindStrength",
+                                                    BENILLA_ADVGFX.foliageWindStrength,
+                                                    "BENILLA_TOOLTIP_FOLIAGE_WIND_STRENGTH")
+                                                BenillaOptionsSliderRow_Setup(this, 0.25, 3, 0.25)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (ao): numeric tiers through the existing localised dropdown. -->
+                                        <Frame name="$parentRowAmbientOcclusion" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowFoliageWindStrength" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowFoliageWindStrength" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "ambientOcclusion", BENILLA_ADVGFX.ambientOcclusion,
+                                                    "BENILLA_TOOLTIP_AMBIENT_OCCLUSION")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.fogOff, value = "0" },
+                                                    { text = BENILLA_ADVGFX.qLow, value = "1" },
+                                                    { text = BENILLA_ADVGFX.qHigh, value = "2" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (lampfog): night point-light airlight tiers. -->
+                                        <Frame name="$parentRowLampFog" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowAmbientOcclusion" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowAmbientOcclusion" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "lampFog", BENILLA_ADVGFX.lampFog,
+                                                    "BENILLA_TOOLTIP_LAMP_FOG")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.fogOff, value = "0" },
+                                                    { text = BENILLA_ADVGFX.qLow, value = "1" },
+                                                    { text = BENILLA_ADVGFX.qHigh, value = "2" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (integration): the daylight lane's district window split (checkbox). -->
+                                        <Frame name="$parentRowDaylightWindowSplit" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowLampFog" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowLampFog" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "daylightWindowSplit",
+                                                    BENILLA_ADVGFX.daylightWindowSplit,
+                                                    "BENILLA_TOOLTIP_DAYLIGHT_WINDOW_SPLIT")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- MONKEY (skybox): the zone skybox switch (integration: appended at the page end). -->
+                                        <Frame name="$parentRowZoneSkyboxes" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowDaylightWindowSplit" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowDaylightWindowSplit" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "zoneSkyboxes",
+                                                    BENILLA_ADVGFX.zoneSkyboxes,
+                                                    "BENILLA_TOOLTIP_ZONE_SKYBOXES")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- GFX (volumetric light): the shaft tiers, 0 Off / 1 Medium / 2 High. -->
+                                        <Frame name="$parentRowVolumetricLight" inherits="BenillaOptionsDropdownRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowZoneSkyboxes" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowZoneSkyboxes" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "volumetricLight", BENILLA_ADVGFX.volumetricLight,
+                                                    "BENILLA_TOOLTIP_VOLUMETRIC_LIGHT")
+                                                BenillaOptionsDropdownRow_Setup(this, {
+                                                    { text = BENILLA_ADVGFX.fogOff, value = "0" },
+                                                    { text = BENILLA_ADVGFX.qMedium, value = "1" },
+                                                    { text = BENILLA_ADVGFX.qHigh, value = "2" },
+                                                })
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- GFX (volumetric light): the shafts' brightness, 0..2 (1 = shipped). -->
+                                        <Frame name="$parentRowVolumetricLightStrength" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowVolumetricLight" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowVolumetricLight" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "volumetricLightStrength",
+                                                    BENILLA_ADVGFX.volumetricLightStrength,
+                                                    "BENILLA_TOOLTIP_VOLUMETRIC_LIGHT_STRENGTH")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 2, 0.25)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- GFX (moonlight): the additive moon term, 0..2 (0 = the reference night). -->
+                                        <Frame name="$parentRowMoonLight" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowVolumetricLightStrength" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowVolumetricLightStrength" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "moonLight", BENILLA_ADVGFX.moonLight,
+                                                    "BENILLA_TOOLTIP_MOONLIGHT")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 2, 0.25)
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                    </Frames>
+                                    <!-- The poll (see AdvGfx_OnUpdate): this is the one page whose
+                                         settings move from outside it — the Lighting Quality row
+                                         writes its members through the host, and the console and
+                                         the dev lighting panel reach the same CVars while the page
+                                         is open. A signature compare four times a second, and a
+                                         refresh only when it actually moves. -->
+                                    <Scripts>
+                                        <OnUpdate>AdvGfx_OnUpdate(this, arg1)</OnUpdate>
                                     </Scripts>
                                 </Frame>
                                 <!-- 1.12's AdvancedOptionsCombatText box, as uvar rows. -->
@@ -2886,6 +4231,14 @@
                                     <Scripts><OnLoad>
                                         this.categoryKey = "Graphics"
                                         getglobal(this:GetName() .. "Label"):SetText("Graphics")
+                                    </OnLoad></Scripts>
+                                </Button>
+                                <!-- MONKEY (advanced graphics): its own head, like every page with
+                                     rows. The label is the page's own bilingual title. -->
+                                <Button name="$parentSearchHeadAdvancedGraphics" inherits="BenillaOptionsSearchHeadTemplate">
+                                    <Scripts><OnLoad>
+                                        this.categoryKey = "AdvancedGraphics"
+                                        getglobal(this:GetName() .. "Label"):SetText(BENILLA_ADVGFX.page)
                                     </OnLoad></Scripts>
                                 </Button>
                                 <Button name="$parentSearchHeadCombat" inherits="BenillaOptionsSearchHeadTemplate">

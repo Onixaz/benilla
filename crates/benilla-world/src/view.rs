@@ -75,8 +75,18 @@ pub struct ViewDistance {
 
 /// The settable range of [`ViewDistance::farclip`]: the reference's `farclip` clamp,
 /// `[0x81021c]` = 177 to `[0x80fed8]` = 777 in its validate callback `0x688d40`; shared by the
-/// CVar apply, the options row and `$WOW_FARCLIP`.
-pub const FARCLIP_RANGE: std::ops::RangeInclusive<f32> = 177.0..=777.0;
+/// CVar apply, the options rows and `$WOW_FARCLIP`.
+///
+/// MONKEY (presets) deviation: the ceiling is [`FARCLIP_MAX`], not 777. Modern fog
+/// (`fog_model::modern_fog_end`) stretches the fog end past 777 with the view distance, so a
+/// longer view is visible rather than fogged; the residency window and the model/particle walls
+/// all follow `farclip`, and the ceiling is what bounds their memory (see [`FARCLIP_MAX`]).
+pub const FARCLIP_RANGE: std::ops::RangeInclusive<f32> = 177.0..=FARCLIP_MAX;
+
+/// MONKEY (presets): the extended `farclip` ceiling — the reference's slider grid (177 + n·60)
+/// carried on to n = 22. The residency window there is ±47 chunks, at most 7×7 ADT tiles against
+/// 777's 5×5: about twice the reference maximum's terrain, doodads and WMOs, and no more.
+pub const FARCLIP_MAX: f32 = 1497.0;
 
 /// The settable range of [`ViewDistance::nearclip`]: the bounds in the reference's `nearclip`
 /// change callback `0x688d90`, `[0x8029d0]` = 0.01 and `[0x808300]` = 0.33.

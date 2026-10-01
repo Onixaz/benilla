@@ -145,8 +145,12 @@ pub mod rig_rider;
 pub mod schedule;
 mod shaders;
 pub mod sky;
+// MONKEY (sky): the sky quality tier and the Enhanced/High inputs.
+pub mod sky_fx;
 pub mod sky_order;
 pub mod skybox;
+// MONKEY (skybox): the skybox rig and material loops.
+mod skybox_anim;
 pub mod static_gx;
 pub mod static_merge;
 pub mod straddle;
@@ -159,6 +163,7 @@ pub mod vis_chain;
 pub mod water_fx;
 pub mod wdl;
 pub mod weather;
+pub mod wind; // MONKEY (wind): shared stateless gust/veer field and foliage quality gate
 pub mod wmo_portal;
 pub mod world_census;
 pub mod world_map;

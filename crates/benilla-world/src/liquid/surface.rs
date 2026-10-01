@@ -11,6 +11,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
 
+use super::lod::LiquidLod;
 use super::query::{wet_footprint, FoamPatch, LiquidSource, WmoPool};
 use crate::collision::liquid_layers;
 use crate::lighting::WATER_SHININESS;
@@ -158,10 +159,11 @@ pub(crate) fn spawn_liquids<'a>(
         };
         let info = wet_footprint(lq, &Transform::IDENTITY, LiquidSource::AdtChunk);
         let foam = !lq.kind.is_fullbright(); // white surf is a water thing
+        let mesh_handle = meshes.add(liquid_bevy_mesh(lq, None));
         entities.push(
             commands
                 .spawn((
-                    Mesh3d(meshes.add(liquid_bevy_mesh(lq, None))),
+                    Mesh3d(mesh_handle.clone()),
                     MeshMaterial3d(material),
                     Transform::IDENTITY,
                     LiquidSurface,
@@ -180,7 +182,9 @@ pub(crate) fn spawn_liquids<'a>(
         if foam {
             commands
                 .entity(*entities.last().expect("just pushed"))
-                .insert(FoamPatch);
+                // MONKEY (water LOD): High may swap this coarse water grid for a transient 4x
+                // near copy; magma/slime remain on their authored topology.
+                .insert((FoamPatch, LiquidLod::new(mesh_handle, lq)));
         }
         // The waterline for the camera sweep under `cameraWaterCollision`; nothing else queries it.
         if let Some(collider) = liquid_collider(lq) {
@@ -225,6 +229,8 @@ fn liquid_bevy_mesh(lq: &LiquidMesh, body_color: Option<[f32; 3]>) -> Mesh {
     // WoW up (0, 0, 1) is Bevy up (0, 1, 0).
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; n]);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, lq.uvs.clone());
+    // UV1.x carries the per-vertex swatch depth (0..1) for the shader's opacity ramp; UV1.y is
+    // unused.
     let uv1: Vec<[f32; 2]> = lq.depths.iter().map(|&d| [d, 0.0]).collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
     // An interior pool's `MOMT.diffColor` rides the vertex colour, where the reference's interior
@@ -256,6 +262,36 @@ pub(crate) fn spawn_wmo_liquids<'a>(
     };
     let path = LiquidPath::wmo(interior);
     for lq in liquids {
+        // MONKEY (water): opt-in evidence for WMO-liquid classification and the raw MLIQ opacity
+        // contract. The byte is not a depth; logging it beside the group and world centre makes a
+        // deterministic capture sufficient to identify the exact canal/pool surface in question.
+        if std::env::var_os("WOW_WATER_PROBE").is_some() {
+            let (depth_min, depth_max, depth_sum) = lq.depths.iter().fold(
+                (f32::INFINITY, f32::NEG_INFINITY, 0.0),
+                |(lo, hi, sum), &v| (lo.min(v), hi.max(v), sum + v),
+            );
+            let local_center = lq
+                .positions
+                .iter()
+                .map(|&position| wow_to_bevy(position))
+                .sum::<Vec3>()
+                / lq.positions.len().max(1) as f32;
+            let world_center = transform.transform_point(local_center);
+            let depth_mean = depth_sum / lq.depths.len().max(1) as f32;
+            info!(
+                "water-probe: WMO group={:?} path={path:?} kind={:?} centre_bevy=({:.2},{:.2},{:.2}) opacity_byte=min:{:.0} mean:{:.1} max:{:.0} verts={} wet_cells={}",
+                pool.owner.map(|room| room.group),
+                lq.kind,
+                world_center.x,
+                world_center.y,
+                world_center.z,
+                depth_min.clamp(0.0, 1.0) * 255.0,
+                depth_mean.clamp(0.0, 1.0) * 255.0,
+                depth_max.clamp(0.0, 1.0) * 255.0,
+                lq.positions.len(),
+                lq.wet.iter().filter(|&&wet| wet).count(),
+            );
+        }
         // The one path that can scroll, decided by the nibble, not the kind (`scrolls`).
         let scroll = scrolls(lq.sound_nibble);
         // The interior arm's body colour via the pool's MLIQ `materialId`; none when fullbright.
@@ -275,9 +311,10 @@ pub(crate) fn spawn_wmo_liquids<'a>(
                 lq.kind, lq.sound_nibble
             );
         }
+        let mesh_handle = meshes.add(liquid_bevy_mesh(lq, body_color));
         let surface = commands
             .spawn((
-                Mesh3d(meshes.add(liquid_bevy_mesh(lq, body_color))),
+                Mesh3d(mesh_handle.clone()),
                 MeshMaterial3d(material),
                 transform,
                 LiquidSurface,
@@ -297,7 +334,10 @@ pub(crate) fn spawn_wmo_liquids<'a>(
             LiquidSource::WmoGroup(pool),
         ));
         if !lq.kind.is_fullbright() {
-            commands.entity(surface).insert(FoamPatch);
+            // MONKEY (water LOD): preserve the WMO grid boundary while refining its near interior.
+            commands
+                .entity(surface)
+                .insert((FoamPatch, LiquidLod::new(mesh_handle, lq)));
         }
         // The camera's waterline, model-local under the entity's placement `transform`.
         if let Some(collider) = liquid_collider(lq) {
@@ -326,11 +366,27 @@ pub(super) fn setup_liquid(
     world_assets: Option<ResMut<WorldAssets>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<LiquidMaterial>>,
+    water_depth: Res<benilla_assets::WaterDepthImage>,
+    water_colour: Res<benilla_assets::WaterColourImage>,
+    water_quality: Res<benilla_assets::WaterQuality>,
 ) {
     let (Some(_config), Some(mut world_assets)) = (config, world_assets) else {
         return; // no client data → no terrain, so no water either
     };
-    // Light, fog and the water swatches come off the shared global-light buffer, as for terrain.
+    // No light seed and no per-frame push: light, fog and both water swatches come off the shared
+    // global-light buffer (`lighting::global_light`), which `build_light_data` has already packed by
+    // the time anything draws — the same path terrain and the models take.
+    // Read once at setup; only frozen water captures consume this override.
+    let capture_time = if std::env::var_os("WOW_CAPTURE").is_some() {
+        std::env::var("WOW_CAPTURE_WATER_T")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let deterministic = crate::dev_state::deterministic_run();
     let mut assets = LiquidAssets::default();
     for &(kind, dir, stem, count) in FRAME_SETS {
         let Some((frames, frame_count)) =
@@ -382,6 +438,7 @@ pub(super) fn setup_liquid(
                     ..default()
                 },
                 extension: LiquidExt {
+                    scene_depth: water_depth.0.clone(),
                     frames: frames.clone(),
                     // x = fullbright (the sheet as body, still fogged); y = the ocean swatch;
                     // z = the interior fog block; w = water's sun-sheen exponent.
@@ -399,12 +456,39 @@ pub(super) fn setup_liquid(
                         0.0,
                         frame_count as f32,
                         if scroll { 1.0 } else { 0.0 },
-                        if crate::dev_state::deterministic_run() {
-                            0.0
-                        } else {
-                            1.0
-                        },
+                        if deterministic { 0.0 } else { 1.0 },
                     ),
+                    // MONKEY (enhanced water): the module's uniform; the sky rows and the
+                    // quality follow at runtime (`liquid/scene_depth.rs`).
+                    water: benilla_assets::WaterUniform {
+                        mode: Vec4::new(
+                            water_quality.0 as f32,
+                            if kind.is_fullbright() {
+                                0.0
+                                // MONKEY (water): exterior WMO canals need a calm but legible ripple
+                                // profile; true interior pools stay quieter under a roof.
+                            } else if path == LiquidPath::WmoExterior {
+                                0.26
+                            } else if path == LiquidPath::WmoInterior {
+                                0.08
+                            } else if kind == LiquidKind::Ocean {
+                                1.0
+                            } else {
+                                0.18
+                            },
+                            capture_time,
+                            if deterministic { 0.0 } else { 1.0 },
+                        ),
+                        lane: Vec4::new(
+                            path.shader_id(),
+                            if kind == LiquidKind::Ocean { 1.0 } else { 0.0 },
+                            if kind.is_fullbright() { 1.0 } else { 0.0 },
+                            if path.interior_fog() { 1.0 } else { 0.0 },
+                        ),
+                        ..default()
+                    },
+                    water_light: world_assets.shared_light.clone(),
+                    scene_colour: water_colour.0.clone(),
                     light_buf: world_assets.shared_light.clone(),
                 },
             });

@@ -18,6 +18,16 @@ pub(super) struct Band<T> {
     values: Vec<T>,
 }
 
+// MONKEY (fog): a band from `(time, value)` keys, for `fog_band`'s tests and tools.
+impl<T: Copy> Band<T> {
+    pub(super) fn from_keys(keys: &[(u32, T)]) -> Self {
+        Band {
+            times: keys.iter().map(|k| k.0).collect(),
+            values: keys.iter().map(|k| k.1).collect(),
+        }
+    }
+}
+
 /// The shared band record: `ID, num, time[16], value[16]`, 34 fields, 136 bytes.
 pub(super) fn band_schema(name: &str, value: FieldType) -> Schema {
     let mut s = Schema::new(name);

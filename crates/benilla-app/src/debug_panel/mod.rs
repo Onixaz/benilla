@@ -23,6 +23,7 @@ use crate::ui_script::EguiPointerOver;
 
 mod inspect;
 mod journal;
+mod lighting_controls;
 
 /// The dev state this panel edits; the engine owns and inits it.
 use benilla_world::dev_state::DebugState;
@@ -274,7 +275,11 @@ fn debug_panel_ui(
     ping: Res<crate::net::PingShared>,
     dropped: Res<crate::net::DroppedOpcodes>,
     mut weather_state: Option<ResMut<benilla_world::weather::WeatherState>>,
-    mut world: WorldReadout,
+    (mut world, video, mut script): (
+        WorldReadout,
+        Res<crate::video::VideoConfig>,
+        Option<NonSendMut<benilla_ui::script::UiScript>>,
+    ),
 ) -> Result {
     if !debug.open {
         return Ok(());
@@ -450,6 +455,12 @@ fn debug_panel_ui(
                             ui.add_space(8.0);
                             ui.checkbox(&mut l.disable_fog, "disable distance fog");
                             ui.checkbox(&mut l.disable_sky_dome, "disable sky dome");
+                        });
+
+                    egui::CollapsingHeader::new("Lighting & shadows")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            lighting_controls::section(ui, &video, script.as_deref_mut());
                         });
 
                     egui::CollapsingHeader::new("Weather")

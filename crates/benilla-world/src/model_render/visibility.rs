@@ -50,6 +50,7 @@ pub(super) fn apply_model_visibility(
         &ModelPart,
         Ref<GlobalTransform>,
         &mut Visibility,
+        &mut super::ShadowOccluder,
         Option<&DoodadFade>,
         Option<&mut MeshTag>,
         Option<&mut MeshMaterial3d<WowModelMaterial>>,
@@ -106,6 +107,7 @@ pub(super) fn apply_model_visibility(
             part,
             xf,
             mut vis,
+            mut occluder,
             fade,
             tag,
             mat,
@@ -215,10 +217,33 @@ pub(super) fn apply_model_visibility(
                 *vis = desired;
             }
 
-            // The two tag fields this system owns, in one read-modify-write: the alpha (fade ×
-            // material factor) for `DoodadFade` holders and every non-unit `MatAnim`, lit interior
-            // props included (their probe payload keeps bits 0..=15 as alpha), and the room's
-            // interior-fog bit. The unit lane's alpha is `entities::apply_unit_mat_alpha`'s.
+            // The shadow-caster verdict: the CONTENT terms only. `portal_visible`, `exterior_ok`
+            // and `owner_hidden` are all functions of where the camera looks, and geometry the
+            // camera cannot see still blocks the sun — folding them in made entity-lane shadows
+            // swing with view direction. Change-gated like every write in this walk.
+            let occludes = toggled_on && in_range && fade_alpha > 0.0 && mat_factor > 0.0;
+            if occluder.0 != occludes {
+                occluder.0 = occludes;
+            }
+
+            // Push the fade alpha to the shader (per-instance `MeshTag` alpha field — `wow_model.wgsl`
+            // multiplies the cutout alpha by it) and swap to the blend material variant while feathering,
+            // back to the cutout once opaque. Write only on change so steady doodads (`fade == 1.0`,
+            // already on the cutout material) cost nothing and don't re-batch every frame.
+            //
+            // The alpha field is written for `DoodadFade` holders (the fade composes `mat_factor` in)
+            // AND for every other non-unit-lane `MatAnim`: the parts that own the channel outright
+            // (`drives_tag` — spell-effect parts, which have no fade) and the pinned no-fade lane —
+            // the lit interior props. The latter used to be skipped ("the tag is a packed colour"),
+            // which was true before the 0355 re-lane but stale after it: the probe-slot payload
+            // keeps bits 0..=15 as the alpha field precisely so `with_alpha` composes with the slot.
+            // Skipping them dropped a batch's authored dimming constant entirely — the Undercity
+            // throne room's LD_lightshaft01 (weights const 0.10/0.05, the reference's near-invisible
+            // haze) blasted at full brightness (bug B30). Only the unit lane stays out:
+            // `entities::apply_unit_mat_alpha` owns that compose, ordered against the interior
+            // classifier and the appear-fade.
+            // The two tag fields this system owns, written in ONE read-modify-write so they
+            // compose instead of racing: the fade alpha, and the room's interior-fog bit.
             if let Some(mut tag) = tag {
                 let mut bits = tag.0;
                 if fade.is_some() || mat_anim.is_some_and(|m| !m.composes_unit_tag()) {

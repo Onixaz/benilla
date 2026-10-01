@@ -100,6 +100,7 @@ fn spawn_exile(commands: &mut Commands, f: &GxFader, alpha: f32, admitted: bool)
             },
             crate::model_render::EntityPathWhy("exile"),
             crate::interact::PickMesh(b.geometry.clone()),
+            // MONKEY (fix-wind): a leaf batch's sway marker rides its material (`FOLIAGE_WIND_MARKER`).
             bevy::mesh::MeshTag(crate::mesh_tag::alpha_bits(alpha)),
             crate::model_fade::DoodadFade {
                 radius: f.radius,

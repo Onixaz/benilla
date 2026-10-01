@@ -2,6 +2,9 @@
 //! `0x58ac70` upload): a 12-ring cap from the pole to the 45° rim, faded at the rim, drawn last in
 //! the sky pass so clouds blend over a setting sun. [`crate::sky_order::CLOUDS_BIAS`] holds that
 //! place; the shared far-depth pin puts it behind all terrain.
+//!
+//! The sun march feed (`update_cloud_fx`):
+//! Ported from WarcraftXL (https://github.com/WarcraftXL) by iThorgrim — module wxl-retail-clouds, Clouds.cpp.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::Projection;
@@ -12,7 +15,7 @@ use bevy::pbr::{
 };
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+    AsBindGroup, Buffer, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
     TextureDimension, TextureFormat,
 };
 use bevy::shader::ShaderRef;
@@ -29,11 +32,39 @@ pub type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudExt>;
 /// The colored cloud texture. The color math is CPU-side as in the reference, so the texels are
 /// raw gamma bytes in a non-sRGB texture.
 #[derive(Asset, AsBindGroup, Clone, TypePath)]
+#[bind_group_data(CloudFxKey)]
 pub struct CloudExt {
     /// The colored tile, alpha the coverage, re-uploaded each regen (`0x58ac70`).
     #[texture(100)]
     #[sampler(101)]
     pub(crate) texels: Handle<Image>,
+    /// MONKEY (sky): `x` the sky tier (detail at 2), `y` reserved (0; the clock is
+    /// [`Self::clock`]), `zw` the unit direction toward the glow body on the sheet
+    /// ([`update_cloud_fx`]).
+    #[uniform(102)]
+    pub(crate) fx: Vec4,
+    /// MONKEY (sky): the Light.dbc cloud sun colour (`rgb`, gamma) and the march strength (`w`).
+    #[uniform(102)]
+    pub(crate) lit: Vec4,
+    /// MONKEY (polish): the shared sky clock ([`crate::sky_fx::SkyClockBuffer`]), outside the
+    /// uniform so the drift never rewrites the material.
+    #[storage(103, read_only, buffer)]
+    pub(crate) clock: Buffer,
+}
+
+/// MONKEY (sky): the pipeline key: High compiles `SKY_FX_CLOUDS` into `cloud.wgsl`; below High
+/// the reference's code runs with nothing added.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CloudFxKey {
+    high: bool,
+}
+
+impl From<&CloudExt> for CloudFxKey {
+    fn from(e: &CloudExt) -> Self {
+        Self {
+            high: e.fx.x >= 1.5,
+        }
+    }
 }
 
 impl MaterialExtension for CloudExt {
@@ -50,8 +81,14 @@ impl MaterialExtension for CloudExt {
         _pipeline: &MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialExtensionKey<Self>,
+        key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        // MONKEY (sky): the High cloud branch.
+        if key.bind_group_data.high {
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push("SKY_FX_CLOUDS".into());
+            }
+        }
         sky_pipeline_state(descriptor);
         Ok(())
     }
@@ -132,7 +169,11 @@ pub(super) fn setup_cloud_layer(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<CloudMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    clock: Option<Res<crate::sky_fx::SkyClockBuffer>>,
 ) {
+    let Some(clock) = clock else {
+        return;
+    };
     let image = images.add(Image::new(
         Extent3d {
             width: COLS as u32,
@@ -156,6 +197,10 @@ pub(super) fn setup_cloud_layer(
         },
         extension: CloudExt {
             texels: image.clone(),
+            // MONKEY (sky): Classic until `update_cloud_fx` reads the tier.
+            fx: Vec4::ZERO,
+            lit: Vec4::ZERO,
+            clock: clock.0.clone(),
         },
     });
     commands.spawn((
@@ -211,6 +256,47 @@ pub(super) fn follow_cloud_dome(
     tf.rotation = Quat::IDENTITY;
     tf.scale = Vec3::splat(far * 0.87);
     *gt = GlobalTransform::from(*tf);
+}
+
+/// MONKEY (sky): feeds the High cloud shading.
+/// Ported from WarcraftXL (https://github.com/WarcraftXL) by iThorgrim — module wxl-retail-clouds, Clouds.cpp.
+/// The march walks the sheet toward the glow body
+/// (sun by day, moon by night), scaled by how far the body sits off the zenith (a noon sun has no
+/// direction on the sheet worth marching, as in WarcraftXL) and by the kernel's own glow envelope.
+pub(super) fn update_cloud_fx(
+    light: Res<crate::lighting::WowLighting>,
+    quality: Res<crate::sky_fx::SkyQuality>,
+    layer: Option<Res<CloudLayer>>,
+    mut materials: ResMut<Assets<CloudMaterial>>,
+) {
+    let Some(layer) = layer else {
+        return;
+    };
+    let (fx, lit) = if quality.high() {
+        let body = light.cloud_glow_dir;
+        let flat = Vec2::new(body.x, body.z);
+        let len = flat.length();
+        let d = if len > 1e-3 { flat / len } else { Vec2::ZERO };
+        let strength =
+            (len * 1.6).min(1.0) * light.cloud_glow_track * (1.0 - 0.75 * light.storm_bcc);
+        let q = |v: f32| benilla_assets::quantize(v, 4096.0);
+        let sun = light.cloud_colors[0];
+        (
+            Vec4::new(f32::from(quality.0), 0.0, q(d.x), q(d.y)),
+            Vec4::new(q(sun[0]), q(sun[1]), q(sun[2]), q(strength.clamp(0.0, 1.0))),
+        )
+    } else {
+        (Vec4::ZERO, Vec4::ZERO)
+    };
+    benilla_assets::write_gated(
+        &mut materials,
+        &layer.material,
+        |m| m.extension.fx != fx || m.extension.lit != lit,
+        |m| {
+            m.extension.fx = fx;
+            m.extension.lit = lit;
+        },
+    );
 }
 
 #[cfg(test)]

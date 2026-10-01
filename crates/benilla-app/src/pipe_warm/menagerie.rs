@@ -9,7 +9,7 @@ use bevy::mesh::{Indices, MeshTag, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::Buffer;
 
-use benilla_assets::materials::{LiquidMaterial, WowModelMaterial};
+use benilla_assets::materials::{LiquidMaterial, TorchBinds, WowModelMaterial};
 use benilla_world::clouds::CloudMaterial;
 use benilla_world::model_render::{
     far_twin_of, model_material, zfill_material, MaterialCache, ShadeSel,
@@ -43,6 +43,11 @@ pub(super) struct WarmLanes<'w> {
     pub(super) images: ResMut<'w, Assets<Image>>,
     /// For the minimap interior composite's tile material, through its production builder.
     ui_quads: ResMut<'w, Assets<crate::ui_pass::UiQuadMaterial>>,
+    /// MONKEY (leftovers): the two sun-shadow proxy lanes, `ShadowCasterMaterial` (solid) and
+    /// `CutoutShadowCasterMaterial` (alpha-tested leaves).
+    /// `Option`: an app without the shadow plugins (tests, the glue) has no store.
+    shadow_solid: Option<ResMut<'w, Assets<crate::shadow_core::ShadowCasterMaterial>>>,
+    shadow_cutout: Option<ResMut<'w, Assets<crate::world_shadow::CutoutShadowCasterMaterial>>>,
 }
 
 /// A portrait booth camera and its layer. Booths run `Msaa::Off`, so each model pipeline has a
@@ -70,6 +75,8 @@ pub(super) fn spawn_menagerie(
     lanes: &mut WarmLanes,
     cache: &mut MaterialCache,
     light: &Buffer,
+    // MONKEY (torch shadows Phase 3A): the shared torch bindings, beside the light buffer.
+    torch: &TorchBinds,
 ) -> usize {
     // The model lane's four layouts (strides 32/48/56/72): static and skinned, plain and
     // vertex-coloured. Statics are render-world-only, so their Aabb is inserted explicitly.
@@ -122,6 +129,7 @@ pub(super) fn spawn_menagerie(
                         false,
                         false, // the world lane
                         light,
+                        torch,
                         // The shared batch material; a per-placement clone has the same
                         // pipeline.
                         None,
@@ -159,6 +167,7 @@ pub(super) fn spawn_menagerie(
                         false,
                         false, // the world lane
                         light,
+                        torch,
                         None,
                     ));
                 }
@@ -167,7 +176,7 @@ pub(super) fn spawn_menagerie(
         // The depth-prime twin (colour writes masked off), plain and cutout.
         for cutout in [false, true] {
             mats.push(zfill_material(
-                cache, materials, None, two_sided, cutout, light,
+                cache, materials, None, two_sided, cutout, light, torch,
             ));
         }
         // The WMO-skybox lane: `sky_depth` is a `WowModelKey` axis (the forced-far-depth branch).
@@ -205,6 +214,7 @@ pub(super) fn spawn_menagerie(
                     false,
                     true, // the sky lane
                     light,
+                    torch,
                     None, // the shared lane
                 ));
             }
@@ -213,6 +223,7 @@ pub(super) fn spawn_menagerie(
     // The ground-clutter lane, both sidednesses and all three alpha modes its builder maps to
     // (Opaque, Mask, Blend). The pipeline sees only key bits, so `clutter_fade` is armed on a
     // copy of the plain material, leaving the dedup cache's entry untouched.
+    let mut clutter_mats: Vec<Handle<WowModelMaterial>> = Vec::new();
     for two_sided in [false, true] {
         for blend in [ModelBlend::Opaque, ModelBlend::AlphaTest, ModelBlend::Blend] {
             let plain = model_material(
@@ -240,6 +251,7 @@ pub(super) fn spawn_menagerie(
                 false,
                 false, // the world lane
                 light,
+                torch,
                 None, // the shared lane
             );
             // `model_render::lazy` parks a built material until something binds it.
@@ -248,6 +260,8 @@ pub(super) fn spawn_menagerie(
                 let mut m = m.clone();
                 m.extension.clutter_fade = Vec4::new(52.5, 70.0, 0.0, 1.0);
                 let clutter = materials.add(m);
+                // MONKEY (fix-wind): also on the clutter mesh layout (UV_1 = wind height/phase).
+                clutter_mats.push(clutter.clone());
                 mats.push(clutter);
             }
         }
@@ -287,6 +301,7 @@ pub(super) fn spawn_menagerie(
                         false,
                         false, // the world lane
                         light,
+                        torch,
                         None, // the shared lane
                     );
                     benilla_world::model_render::lazy::realize_all(materials);
@@ -395,6 +410,19 @@ pub(super) fn spawn_menagerie(
     let posuv = meshes.add(warm_pos_uv_mesh());
     let liquid_mesh = meshes.add(warm_liquid_mesh(false));
     let liquid_color_mesh = meshes.add(warm_liquid_mesh(true));
+    // MONKEY (fix-wind): clutter meshes carry POS + NORMAL + UV_0 + UV_1 (wind) + COLOR, a layout
+    // (and `VERTEX_UVS_B`) the model quads lack; the liquid colour quad has exactly that set.
+    for mat in &clutter_mats {
+        spawn_lane_rig(
+            commands,
+            cam,
+            None,
+            &liquid_color_mesh,
+            None,
+            mat.clone(),
+            &mut count,
+        );
+    }
     // Celestial discs and glares (`sun::setup` quads: position, normal, UV).
     for mat in lane_handles(&mut lanes.celestial) {
         spawn_lane_rig(
@@ -559,6 +587,55 @@ pub(super) fn spawn_menagerie(
         WarmRig,
     ));
     count += 1;
+
+    // MONKEY (leftovers): the sun-shadow proxy lanes. Production proxies live on the private
+    // layer 31, which the sun rig's directional light casts from and the world camera also draws
+    // (forward discards every fragment). The solid proxy usually compiles at entry anyway (the
+    // player's own caster), but the cutout one first appears with the first leaf card in reach,
+    // which can be long after the cover lifts. Each rig sits on layers 0 and 31: the world camera
+    // mints the forward pipeline, the shadow views (when a sun rig is live) the depth one. Meshes
+    // are the production attribute sets (`empty_shadow_mesh` / `empty_cutout_mesh`), non-empty.
+    let proxy_layers = bevy::camera::visibility::RenderLayers::from_layers(&[
+        0,
+        crate::shadow_core::PLAYER_SHADOW_LAYER,
+    ]);
+    let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]];
+    let mut solid_mesh = crate::shadow_core::empty_shadow_mesh();
+    solid_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, tri.to_vec());
+    solid_mesh.insert_indices(Indices::U32(vec![0, 1, 2]));
+    let mut cutout_mesh = crate::shadow_core::empty_cutout_mesh();
+    cutout_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, tri.to_vec());
+    cutout_mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![[0.0f32, 0.0], [1.0, 0.0], [1.0, 1.0]],
+    );
+    cutout_mesh.insert_indices(Indices::U32(vec![0, 1, 2]));
+    if let Some(store) = lanes.shadow_solid.as_mut() {
+        let solid = store.add(crate::shadow_core::ShadowCasterMaterial {});
+        spawn_lane_rig(
+            commands,
+            cam,
+            Some(proxy_layers.clone()),
+            &meshes.add(solid_mesh),
+            None,
+            solid,
+            &mut count,
+        );
+    }
+    if let Some(store) = lanes.shadow_cutout.as_mut() {
+        // A real stand-in leaf, so the `#[texture]` binding never lands on the retry path.
+        let leaf = lanes.images.add(Image::default());
+        let cutout = store.add(crate::world_shadow::CutoutShadowCasterMaterial { leaf });
+        spawn_lane_rig(
+            commands,
+            cam,
+            Some(proxy_layers),
+            &meshes.add(cutout_mesh),
+            None,
+            cutout,
+            &mut count,
+        );
+    }
 
     count
 }
@@ -750,6 +827,7 @@ fn warm_quad(colors: bool, skinned: bool) -> RenderSubmesh {
         rgb_seq: None,
         wmo_batch: None,
         section: None,
+        stage1: None,
     }
 }
 
@@ -765,6 +843,14 @@ mod tests {
         // `FfxCombinePipeline` compiles covered the same way (first frame, pre-world, a bake's
         // fixed format; a world view's pair every frame in `prepare_textures`); this mention of
         // its name is what passes it here.
+        // - MONKEY (integration) ShaftPipeline (`post::sun_shafts`), FogPipeline
+        //   (`volumetric_fog`, incl. lamp fog) and AoPipeline (`ssao`): fullscreen passes keyed
+        //   only on the view's target format and MSAA (plus the AO stage/debug flag). Each lane's
+        //   `prepare_pipelines` specialises every such key for EVERY `Camera3d` view on every
+        //   frame, whether its cvar is on or not, so the variants compile behind the entry cover
+        //   and a player enabling the row later hits the cache, not a live compile.
+        // - GFX (volumetric light) VolLightPipeline (`volumetric_light`): the same contract, its
+        //   march/blur/composite keys warmed for every 3-D view every frame.
         let exempt = ["UiGammaPipeline"];
         let own_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let warm_src = std::fs::read_to_string(own_src.join("pipe_warm/mod.rs")).unwrap()
