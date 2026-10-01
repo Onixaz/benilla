@@ -343,7 +343,7 @@ fn ensure_ffx_glow(
 // ---------------------------------------------------------------- render world
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
-struct FfxGlowLabel;
+pub(crate) struct FfxGlowLabel;
 
 /// The layouts, samplers, wave LUT and pipelines, built once at startup.
 #[derive(Resource)]

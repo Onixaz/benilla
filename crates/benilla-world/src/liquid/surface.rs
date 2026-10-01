@@ -120,15 +120,22 @@ impl LiquidAssets {
 #[derive(Component)]
 pub(crate) struct LiquidSurface;
 
-/// `WOW_NO_LIQUID`: hide every liquid surface and only the surface, since the swim grid, foam and
-/// sound ride sibling components. An override run after both per-frame `Visibility` owners (the
-/// exterior cull for ADT surfaces, `apply_model_visibility` for WMO pools), so it wins the frame.
+/// `WOW_NO_LIQUID`, or active DLSS prototype: hide every liquid surface and only the surface,
+/// since the swim grid, foam and sound ride sibling components. An override run after both
+/// per-frame `Visibility` owners (the exterior cull for ADT surfaces, `apply_model_visibility`
+/// for WMO pools), so it wins the frame.
 pub(super) fn hide_liquid_surfaces(mut surfaces: Query<&mut Visibility, With<LiquidSurface>>) {
     for mut vis in &mut surfaces {
         if *vis != Visibility::Hidden {
             *vis = Visibility::Hidden;
         }
     }
+}
+
+/// DLSS hides liquid only after Bevy has confirmed Super Resolution support; an unsupported RTX
+/// request remains on the normal liquid renderer instead of silently losing a scene feature.
+pub(super) fn liquid_surfaces_disabled(dlss: Option<Res<crate::dlss::DlssPrototypeState>>) -> bool {
+    std::env::var_os("WOW_NO_LIQUID").is_some() || dlss.is_some_and(|state| state.active())
 }
 
 /// The ambient loop's sound-class nibble, resolved through `SoundWaterType.dbc` (`0x54e0a0`), on

@@ -88,6 +88,7 @@ pub fn run(build: BuildId) -> AppExit {
     }
 
     let background = crate::bgwin::background_run();
+    crate::dlss::install_before_default_plugins(&mut app);
     app.add_plugins(boot::tuned_default_plugins(Window {
         title: "benilla worldview".into(),
         resolution: std::env::var("WOW_WIN")
@@ -125,6 +126,7 @@ pub fn run(build: BuildId) -> AppExit {
 
     // The cut line: the engine's whole plugin group, the same one the client adds.
     app.add_plugins(crate::world_plugins::WorldPlugins);
+    crate::dlss::install_after_default_plugins(&mut app);
     stubs(&mut app);
 
     app.add_plugins(plugin);

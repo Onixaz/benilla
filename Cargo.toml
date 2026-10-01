@@ -42,6 +42,9 @@ lua-src = { path = "third_party/lua-src" }
 # kira 0.12.4, patched to compute spatial gains and the volume tween per output chunk and
 # interpolate them, not per sample frame (`third_party/kira/BENILLA.md`).
 kira = { path = "third_party/kira" }
+# Bevy 0.18 uses dlss_wgpu 2.0.0. Its fixed 16-entry NGX G-buffer initializer fails with newer
+# SDK headers; this vendored compatibility patch derives the binding layout from those headers.
+dlss_wgpu = { path = "third_party/dlss_wgpu" }
 
 # Dependencies at opt-level 3 in dev: at opt-level 0, avian/parry collision drops a run to <1 fps.
 [profile.dev.package."*"]

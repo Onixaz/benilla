@@ -100,14 +100,16 @@ impl Plugin for LiquidPlugin {
                         .in_set(SubmersionVerdict),
                 ),
             )
-            // The `WOW_NO_LIQUID` override: after both per-frame `Visibility` owners of a surface
-            // (the exterior cull, the model-visibility authority) and before Bevy reads it.
+            // `WOW_NO_LIQUID`, or an active DLSS prototype: after both per-frame `Visibility`
+            // owners of a surface (the exterior cull, the model-visibility authority) and before
+            // Bevy reads it. DLSS keeps the established liquid data/logic but hides the renderer
+            // until it understands the lower main-pass resolution.
             .add_systems(
                 PostUpdate,
                 surface::hide_liquid_surfaces
                     .after(crate::exterior_cull::ExteriorCullSet)
                     .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
-                    .run_if(|| std::env::var_os("WOW_NO_LIQUID").is_some()),
+                    .run_if(surface::liquid_surfaces_disabled),
             );
         // Added only when `WOW_FORCE_SUB` names a hold: an ordinary run carries no system for it.
         if forced_submersion_frames() > 0 {
