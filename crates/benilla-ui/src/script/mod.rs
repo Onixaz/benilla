@@ -258,9 +258,9 @@ pub use trainer::{
     TrainerState, TrainerTooltip, TRAINER_GROUP_KNOWN,
 };
 pub use types::{
-    BlendMode, EditAction, EditBoxTextUi, EditOutcome, EditUnit, ExtractedQuad, FontObject,
-    FontShadow, Gradient, JustifyH, JustifyV, LineMeasureRequest, MeasureRequest, Outline,
-    QuadContent, ScriptValue, TexCoords,
+    BlendMode, EditAction, EditBoxAdvanceRequest, EditBoxTextUi, EditOutcome, EditUnit,
+    ExtractedQuad, FontObject, FontShadow, Gradient, JustifyH, JustifyV, LineMeasureRequest,
+    MeasureRequest, Outline, QuadContent, ScriptValue, TexCoords,
 };
 pub(crate) use types::{FontExplicit, MeasuredText, RegionData};
 pub use unit::{
@@ -422,8 +422,9 @@ const SCRIPT_KINDS: [&str; 39] = [
     "OnTabPressed",
     "OnTextChanged",
     "OnTextSet",
-    // The caret flush's own (`0x77da80`), fired by the tick's `drain_cursor_changed` when the
-    // caret moved: the edge `ScrollingEdit_OnCursorChanged` scrolls a multiline box by.
+    // The caret leg's own (`0x77da80`), fired by the box's flush on dirty bit 2, which a caret
+    // move, an edit, a focus change and a re-seat raise: the edge `ScrollingEdit_OnCursorChanged`
+    // scrolls a multiline box by.
     "OnCursorChanged",
     "OnEditFocusGained",
     "OnEditFocusLost",
@@ -879,19 +880,30 @@ impl UiScript {
     }
 
     /// Resolve and cache every frame's rect, which `GetWidth`/`GetHeight`/`extract` read, then fire
-    /// `OnSizeChanged` for frames whose size moved ([`event::fire_size_changes`]).
+    /// `OnSizeChanged` for frames whose size moved ([`event::fire_size_changes`]) and re-seat the
+    /// text of every resized EditBox.
     pub fn resolve(&mut self) {
+        self.resolve_and_measure();
+        event::fire_size_changes(&self.lua);
+        // The EditBox's own `OnSizeChanged` (`0x77a8d0`) runs after the script fire and re-seats a
+        // resized box's text, which the reference's drain resolves in the same pass.
+        let reseated = editbox::reseat_resized(&mut self.model_mut());
+        if reseated {
+            self.resolve_and_measure();
+        }
+    }
+
+    /// Resolve, and with a font engine installed ([`Self::set_text_measurer`]) measure what the
+    /// solve revealed and solve again, so a FontString's box is right in the frame its text was set.
+    fn resolve_and_measure(&mut self) {
         {
             let mut model = self.model_mut();
             Self::resolve_layout(&mut model);
         }
-        // With a font engine installed ([`Self::set_text_measurer`]), measure what the solve
-        // revealed and solve again, so a FontString's box is right in the frame its text was set.
         if self.fill_measures() {
             let mut model = self.model_mut();
             Self::resolve_layout(&mut model);
         }
-        event::fire_size_changes(&self.lua);
     }
 
     /// Store host measurements `(id, w, h, natural_w, key)` for [`MeasureRequest`]s; the next
@@ -960,6 +972,10 @@ impl UiScript {
                 }
                 KindState::EditBox(eb) => {
                     eb.advances_key = eb.advances_key.wrapping_add(1);
+                    eb.line_height = None;
+                    // A multi-line box's height is its text's measure: owed again on the new
+                    // raster, which moves no rect here to re-seat it.
+                    eb.relayout_owed = true;
                 }
                 _ => {}
             }
@@ -1042,7 +1058,7 @@ impl UiScript {
     /// Whether the focused EditBox is in alt-arrow mode (XML `ignoreArrows`, Lua
     /// `SetAltArrowKeyMode`, `[editbox+0x318] & 0x10`): without ALT the reference declines the four
     /// arrows (`0x77b1c4`), so they reach the world's bindings and turn the player while chat has
-    /// focus. The gate is on the key, not the [`EditAction`]: HOME and END also move to an edge.
+    /// focus. The gate is on the key, not the [`EditAction`]: HOME and END also move the caret.
     pub fn editbox_alt_arrow_mode(&self) -> bool {
         let model = self.model_ref();
         model.focused_editbox.is_some_and(|h| {
