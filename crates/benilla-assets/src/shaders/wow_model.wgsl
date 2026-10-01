@@ -94,6 +94,11 @@ struct WowLight {
     // Per rig slot, the straddle waterline (size mirrored in straddle.rs): x = its world height
     // (Bevy Y), y = the side the near copy keeps (+1 above, −1 below, 0 not straddling).
     water_clip: array<vec2<f32>, 2048>,
+    // Per rig slot: the prior rendered frame's world origin. The temporal prepass will pair this
+    // with the second palette bank below; the forward path intentionally still reads rig_origin.
+    previous_rig_origin: array<vec4<f32>, 2048>,
+    // Current rows first, then 3 * 131072 previous rows. This remains the struct's only runtime
+    // array, which lets every wow_light-layout buffer share one binding and one size contract.
     palettes: array<vec4<f32>>,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(90) var<storage, read> wow_light: WowLight;
