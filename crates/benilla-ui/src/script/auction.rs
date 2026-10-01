@@ -262,9 +262,19 @@ fn row_at(model: &Model, kind: &str, index: usize) -> Option<AuctionItemRow> {
         .cloned()
 }
 
-/// The sell slot's `(name, texture, count, quality, canUse, stackValue)`, `stackValue` being the
-/// vendor price times the stack: the base of the suggested opening price and the deposit.
-fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bool, u32)> {
+/// The sell slot's vanilla six values, then Turtle 1.18.1's `maxStack` and `itemLink` extension.
+type SellItemInfo = (
+    String,
+    Option<String>,
+    u32,
+    i64,
+    bool,
+    u32,
+    u32,
+    Option<String>,
+);
+
+fn sell_item_info(model: &Model) -> Option<SellItemInfo> {
     let it = model.auction_sell_item.as_ref()?;
     // The real stack size, not the split-carry field: the deposit is per stack.
     let count = cursor::held_count(model, it);
@@ -280,6 +290,8 @@ fn sell_item_info(model: &Model) -> Option<(String, Option<String>, u32, i64, bo
         quality,
         can_use,
         sell_price.saturating_mul(count),
+        template.map_or(1, |v| v.stackable.max(1)),
+        it.link.clone(),
     ))
 }
 
@@ -700,13 +712,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, minutes: u32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let rate = model.auction.as_ref().map_or(0, |a| a.deposit_percent);
-            let stack_value = sell_item_info(&model).map_or(0, |(_, _, _, _, _, v)| v);
+            let stack_value = sell_item_info(&model).map_or(0, |(_, _, _, _, _, v, _, _)| v);
             Ok(i64::from(deposit_for(rate, stack_value, minutes)))
         })?,
     )?;
 
-    // GetAuctionSellItemInfo() → name, texture, count, quality, canUse, price: six values always.
-    // An empty slot answers count 1 and quality -1: the stock Lua reads `count > 1` unguarded.
+    // GetAuctionSellItemInfo() answers vanilla's six values, followed by Turtle 1.18.1's maxStack
+    // and itemLink extension. An empty slot needs numeric count/maxStack because Turtle's patched
+    // Auction UI performs `maxStack - count` while the addon's OnLoad seeds its duration.
     g.set(
         "GetAuctionSellItemInfo",
         lua.create_function(|lua, ()| {
@@ -714,7 +727,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 sell_item_info(&model)
             };
-            let Some((name, texture, count, quality, can_use, price)) = info else {
+            let Some((name, texture, count, quality, can_use, price, max_stack, link)) = info
+            else {
                 return Ok(MultiValue::from_vec(vec![
                     Value::Nil,
                     Value::Nil,
@@ -722,6 +736,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Value::Integer(-1),
                     Value::Nil,
                     Value::Integer(0),
+                    Value::Integer(1),
+                    Value::Nil,
                 ]));
             };
             Ok(MultiValue::from_vec(vec![
@@ -738,6 +754,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(quality),
                 flag(can_use),
                 Value::Integer(i64::from(price)),
+                Value::Integer(i64::from(max_stack)),
+                match link {
+                    Some(link) => Value::String(lua.create_string(&link)?),
+                    None => Value::Nil,
+                },
             ]))
         })?,
     )?;
@@ -883,6 +904,14 @@ mod tests {
         use crate::script::cursor::CursorItem;
 
         let mut s = UiScript::new().unwrap();
+        let link = "|cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r";
+        s.set_item_template(
+            2589,
+            crate::script::ItemTemplateView {
+                stackable: 20,
+                ..Default::default()
+            },
+        );
         let mut slots = std::collections::HashMap::new();
         slots.insert(
             1u32,
@@ -908,7 +937,7 @@ mod tests {
                 slot: 1,
                 item_id: 2589,
                 texture: None,
-                link: None,
+                link: Some(link.into()),
                 count: None,
                 quality: None,
                 equip_slots: Vec::new(),
@@ -919,6 +948,34 @@ mod tests {
             .eval(r#"local _, _, c = GetAuctionSellItemInfo() return c"#)
             .unwrap();
         assert_eq!(count, 20, "the whole stack, not one of it");
+        let (max_stack, got_link): (i64, String) = s
+            .eval(r#"local _, _, _, _, _, _, m, l = GetAuctionSellItemInfo() return m, l"#)
+            .unwrap();
+        assert_eq!(max_stack, 20, "Turtle's seventh value is the template cap");
+        assert_eq!(got_link, link, "and its eighth is the held item's link");
+    }
+
+    #[test]
+    fn the_empty_sell_slot_keeps_turtles_load_time_deposit_numeric() {
+        let s = UiScript::new().unwrap();
+        assert_eq!(s.arity("GetAuctionSellItemInfo()").unwrap(), 8);
+        let (count, quality, price, max_stack, link): (i64, i64, i64, i64, Value) = s
+            .eval(
+                "local _, _, c, q, _, p, m, l = GetAuctionSellItemInfo() \
+                 return c, q, p, m, l",
+            )
+            .unwrap();
+        assert_eq!((count, quality, price, max_stack), (1, -1, 0, 1));
+        assert_eq!(link, Value::Nil);
+        assert_eq!(
+            s.eval::<i64>(
+                "local _, _, stackSize, _, _, price, maxStack = GetAuctionSellItemInfo() \
+                 return floor(price * 4 * (1 + (maxStack - stackSize) * 0.05) * 0.025)",
+            )
+            .unwrap(),
+            0,
+            "Turtle's CalculateAuctionDeposit body runs during AuctionFrameAuctions:OnLoad"
+        );
     }
 
     #[test]

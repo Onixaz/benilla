@@ -11,6 +11,14 @@
 /// list may only shrink.
 const NOT_YET_ASSERTED: &[(&str, usize, &str)] = &[];
 
+/// Deliberate Turtle UI extensions: name, vanilla arity, Turtle arity, and consumer.
+const TURTLE_ARITY_EXTENSIONS: &[(&str, usize, usize, &str)] = &[(
+    "GetAuctionSellItemInfo",
+    6,
+    8,
+    "Turtle 1.18.1 appends maxStack and itemLink for its auction deposit calculation",
+)];
+
 /// The kind gate's list, same rules: a name, the wrong kinds it answers and the reason. An entry
 /// whose binding comes into agreement fails the gate.
 const KINDS_NOT_YET_ASSERTED: &[(&str, &str, &str)] = &[];
@@ -143,6 +151,19 @@ fn every_query_binding_answers_the_reference_s_return_arity() {
         }
         checked += 1;
         if got as usize != want {
+            if let Some((_, vanilla, turtle, consumer)) =
+                TURTLE_ARITY_EXTENSIONS.iter().find(|(n, ..)| n == name)
+            {
+                assert_eq!(
+                    *vanilla, want,
+                    "{name}'s recorded vanilla arity is stale: the reference now says {want}"
+                );
+                assert_eq!(
+                    *turtle, got as usize,
+                    "{name}'s Turtle extension changed: {consumer}"
+                );
+                continue;
+            }
             if let Some((_, known, _)) = NOT_YET_ASSERTED.iter().find(|(n, ..)| n == name) {
                 assert_eq!(
                     *known, want,
