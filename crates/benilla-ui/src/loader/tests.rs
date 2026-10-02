@@ -1015,6 +1015,50 @@ mod loader_tests {
         );
     }
 
+    /// An instance's `<NormalTexture>` is a fresh texture (`0x778fd0` destroys the template's), so
+    /// the template's `<TexCoords>` do not crop it: Turtle's transmog tiles override
+    /// `UIPanelButtonTemplate`'s and draw their whole 128² art.
+    #[test]
+    fn an_instance_state_texture_drops_the_templates_tex_coords() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                <Button name="CroppedTemplate" virtual="true">
+                    <Size><AbsDimension x="40" y="20"/></Size>
+                    <NormalTexture file="Interface\Template">
+                        <TexCoords left="0" right="0.625" top="0" bottom="0.6875"/>
+                    </NormalTexture>
+                </Button>
+                <Button name="WholeArt" inherits="CroppedTemplate">
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                    <NormalTexture file="Interface\Whole"/>
+                </Button>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        let tc: Vec<f32> = s
+            .eval("return { WholeArt:GetNormalTexture():GetTexCoord() }")
+            .unwrap();
+        assert_eq!(tc, vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            s.eval::<String>("return WholeArt:GetNormalTexture():GetTexture()")
+                .unwrap(),
+            "Interface\\Whole"
+        );
+        s.resolve();
+        let drawn = s
+            .extract()
+            .into_iter()
+            .filter(|q| matches!(&q.content, QuadContent::Texture { path: Some(_), .. }))
+            .count();
+        assert_eq!(
+            drawn, 1,
+            "the template's texture is destroyed, not left drawing"
+        );
+    }
+
     /// The setter's implicit `SetAllPoints` is cleared before the authored anchors apply, so no
     /// implicit corner survives to weld the state texture to the button.
     #[test]

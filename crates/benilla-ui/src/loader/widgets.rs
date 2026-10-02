@@ -87,6 +87,10 @@ impl Loader<'_> {
                 // (`0x6f26f0`, from `0x778903`), so a `<Color>` is the region's own colour fill; the
                 // Lua setter has no colour form (`0x781970`). `""` creates the slot unpainted.
                 let color = children_named(t, "Color").next().map(color_of);
+                // The adder builds a fresh texture and the slot store destroys the one it displaces
+                // (`0x778fd0`), so an instance's `<NormalTexture>` keeps nothing of its template's:
+                // not `UIPanelButtonTemplate`'s `<TexCoords>`, nor its size or tint.
+                this.call(wrapper, method, mlua::Value::Nil, dbg);
                 match t.attr("file") {
                     Some(file) => this.call(wrapper, method, file.to_string(), dbg),
                     None => this.call(wrapper, method, String::new(), dbg),
