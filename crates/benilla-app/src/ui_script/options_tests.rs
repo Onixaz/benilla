@@ -2540,6 +2540,39 @@ fn the_controls_checkboxes_write_flags_with_the_interface_panel_kit() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// Click-to-Move (`UIOptionsFrame.lua:7`) moves `AutoInteract`, which boots off as 1.12's Western
+/// client registers it (`0x603374`).
+#[test]
+fn the_controls_page_offers_click_to_move_on_autointeract() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = harness_on(audio_harness());
+    s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
+    let _ = s.take_cvar_changes();
+    let row = "BenillaOptionsFrameContainerBodyControlsRowClickToMove";
+    assert_eq!(
+        s.eval::<String>(&format!("return {row}Label:GetText()"))
+            .unwrap(),
+        "Click-to-Move"
+    );
+    assert!(
+        !s.eval::<bool>(&format!("return {row}Check:GetChecked()"))
+            .unwrap(),
+        "off by default"
+    );
+
+    s.run(&format!("{row}Check:Click()")).unwrap();
+    assert_eq!(
+        s.take_cvar_changes(),
+        vec![("AutoInteract".to_string(), "1".to_string())]
+    );
+    assert_eq!(
+        s.eval::<String>("return GetCVar(\"AutoInteract\")")
+            .unwrap(),
+        "1"
+    );
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 #[test]
 fn defaults_resets_the_controls_page_to_registered_defaults() {
     benilla_formats::wow_data_or_skip!();
@@ -3141,7 +3174,7 @@ fn every_row_tooltip_key_resolves_in_the_real_global_strings() {
         );
         checked += 1;
     }
-    // 82 rows less the three untipped below; four of the 79 carry a `BENILLA_` key, and a dropdown
+    // 83 rows less the three untipped below; four of the 80 carry a `BENILLA_` key, and a dropdown
     // row is checked on the key it wears at rest.
     // The merged Advanced Graphics page contributes 37 rows, with three shadow rows moved from
     // Graphics rather than duplicated. All but the three stock untipped rows below have text.
@@ -4909,17 +4942,6 @@ fn without_a_seated_measurer_the_same_fit_reads_zero() {
 // nothing and reads back nil, so its box would offer a setting benilla does not have. A CVar is
 // registered only once something reads it.
 const UNBACKED_REFERENCE_CVARS: &[(&str, &str)] = &[
-    (
-        "autointeract",
-        "click-to-move — the one row here that is a whole movement mode rather than a knob. \
-         `CanAutoInteract 0x60f900` gates the world-click pick mask's bit 0 and inverts \
-         `0x5ec110`'s interaction-distance refusal, so an out-of-range corpse/GO/NPC/cast click \
-         queues an approach (`0x60fed0`, move kinds 6/7/9/0xa) instead of refusing. The commit \
-         itself puts NOTHING on the wire — it stamps a local goal at `0x611130` — and the packets \
-         are its consequences (a stand, then the original verb on arrival). benilla has only the \
-         keyboard controller and /follow (mode 3). Registered default is \"0\" on every locale but \
-         koKR (`0x603374` selects on the locale index), so stock West ships it OFF",
-    ),
     (
         "UnitNamePlayerPVPTitle",
         "the PvP rank prefix on the overhead name line — slot a4 of `0x608f50`, bit `0x20` of the \
