@@ -9,6 +9,10 @@ build = "build.rs"
 [lints]
 workspace = true
 
+[features]
+# The A/B key is an instrument, never a player-facing setting.
+dev = []
+
 [dependencies]
 ash.workspace = true
 bevy = { workspace = true, features = ["raw_vulkan_init"] }

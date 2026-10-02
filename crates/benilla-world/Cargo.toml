@@ -15,6 +15,8 @@ default = ["dev"]
 # `bevy/debug` names systems and parameters in ECS diagnostics (else "Enable the debug feature to
 # see the name"); set here so `benilla-worldview`, which reports those names, gets it too.
 dev = ["benilla-formats/dev", "benilla-assets/dev", "bevy/debug"]
+# The optional Feature-18 graph edge keeps the isolated NGX crate out of normal world builds.
+dlss = ["dep:benilla-dlss5"]
 [dependencies]
 avian3d = "0.6"
 benilla-assets = { path = "../benilla-assets", default-features = false }
@@ -22,6 +24,7 @@ benilla-formats = { path = "../benilla-formats", default-features = false }
 # No `benilla-protocol`: the engine renders a world and does not speak the protocol.
 # For the portal audit, which re-parses a WMO group to check its decode against the file.
 benilla-wmo = { path = "../benilla-wmo" }
+benilla-dlss5 = { path = "../benilla-dlss5", optional = true }
 bevy.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }

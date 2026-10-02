@@ -12,13 +12,13 @@ workspace = true
 # `dev` compiles in the instruments; the player build (`scripts/gates.sh`) has no defaults.
 default = ["dev"]
 # The asset, format and world crates default `dev` on, so they come in without it, forwarded here.
-dev = ["benilla-assets/dev", "benilla-formats/dev", "benilla-world/dev", "dep:bevy_egui"]
+dev = ["benilla-assets/dev", "benilla-formats/dev", "benilla-world/dev", "benilla-dlss5?/dev", "dep:bevy_egui"]
 tracy = ["bevy/trace_tracy"]
 # Writes every system's per-run span to `trace-<ts>.json` in the cwd.
 trace_chrome = ["bevy/trace_chrome"]
 # Keep the historical `--features dlss` developer switch. It enables Neural Rendering, not the
 # removed Super Resolution path.
-dlss = ["dep:benilla-dlss5"]
+dlss = ["dep:benilla-dlss5", "benilla-world/dlss"]
 [dependencies]
 anyhow.workspace = true
 # The EditBox clipboard, on the main thread as NSPasteboard requires; bevy_egui's 3.x.

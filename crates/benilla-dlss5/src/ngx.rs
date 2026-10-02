@@ -8,6 +8,8 @@ use std::path::Path;
 use std::ptr;
 
 pub const FEATURE_DLSSNR: u32 = 18;
+/// The strongest supported Feature-18 blend for this experimental renderer.
+pub const DLSSNR_INTENSITY: f32 = 2.0;
 const NGX_VERSION_API: u32 = 0x0000_0015;
 const NGX_SUCCESS: u32 = 1;
 type VkHandle = *const c_void;
@@ -30,6 +32,12 @@ unsafe extern "C" {
     fn NVSDK_NGX_VULKAN_GetCapabilityParameters(out: *mut *mut c_void) -> u32;
     fn NVSDK_NGX_Parameter_SetUI(parameters: *mut c_void, name: *const c_char, value: u32);
     fn NVSDK_NGX_Parameter_SetI(parameters: *mut c_void, name: *const c_char, value: i32);
+    fn NVSDK_NGX_Parameter_SetF(parameters: *mut c_void, name: *const c_char, value: f32);
+    fn NVSDK_NGX_Parameter_SetVoidPointer(
+        parameters: *mut c_void,
+        name: *const c_char,
+        value: *const c_void,
+    );
 }
 
 type InitExt2 = unsafe extern "C" fn(
@@ -46,6 +54,24 @@ type InitExt2 = unsafe extern "C" fn(
 type CreateFeature =
     unsafe extern "C" fn(VkHandle, VkHandle, u32, *const c_void, *mut *mut c_void) -> u32;
 type ReleaseFeature = unsafe extern "C" fn(*mut c_void) -> u32;
+type EvaluateFeature =
+    unsafe extern "C" fn(VkHandle, *const c_void, *const c_void, *const c_void) -> u32;
+
+#[repr(C)]
+pub(crate) struct ResourceVk {
+    view: u64,
+    image: u64,
+    aspect: u32,
+    base_mip: u32,
+    level_count: u32,
+    base_layer: u32,
+    layer_count: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+    type_: u32,
+    read_write: u32,
+}
 
 #[derive(Clone, Copy)]
 pub struct DeviceHandles {
@@ -61,6 +87,7 @@ pub struct NgxCore {
     _runtime: libloading::Library,
     create_feature: CreateFeature,
     release_feature: ReleaseFeature,
+    evaluate_feature: EvaluateFeature,
 }
 
 // The render-world runtime serializes every call and holds the render device until after release.
@@ -129,7 +156,11 @@ impl NgxCore {
         let release_feature: libloading::Symbol<ReleaseFeature> = library
             .get(b"NVSDK_NGX_VULKAN_ReleaseFeature\0")
             .map_err(|error| format!("DLSSNR ReleaseFeature export missing: {error}"))?;
-        let (init, create_feature, release_feature) = (*init, *create_feature, *release_feature);
+        let evaluate_feature: libloading::Symbol<EvaluateFeature> = library
+            .get(b"NVSDK_NGX_VULKAN_EvaluateFeature\0")
+            .map_err(|error| format!("DLSSNR EvaluateFeature export missing: {error}"))?;
+        let (init, create_feature, release_feature, evaluate_feature) =
+            (*init, *create_feature, *release_feature, *evaluate_feature);
         let result = init(
             0x1122_3344_5566_7788,
             data_dir.as_ptr(),
@@ -152,6 +183,7 @@ impl NgxCore {
             _runtime: library,
             create_feature,
             release_feature,
+            evaluate_feature,
         })
     }
 
@@ -202,6 +234,101 @@ impl NgxCore {
     pub unsafe fn release_feature(&self, feature: *mut c_void) {
         let _ = (self.release_feature)(feature);
     }
+
+    /// # Safety
+    /// The resources and command buffer must belong to this NGX runtime's live Vulkan device.
+    pub unsafe fn evaluate(
+        &self,
+        command_buffer: VkHandle,
+        feature: *mut c_void,
+        color: ResourceVk,
+        output: ResourceVk,
+        depth: ResourceVk,
+        motion: ResourceVk,
+    ) -> Result<(), u32> {
+        let set_u32 = |name: &str, value| {
+            let name = CString::new(name).expect("NGX parameter names contain no NUL");
+            NVSDK_NGX_Parameter_SetUI(self.parameters, name.as_ptr(), value);
+        };
+        let set_f32 = |name: &str, value| {
+            let name = CString::new(name).expect("NGX parameter names contain no NUL");
+            NVSDK_NGX_Parameter_SetF(self.parameters, name.as_ptr(), value);
+        };
+        let set_resource = |name: &str, resource: &ResourceVk| {
+            let name = CString::new(name).expect("NGX parameter names contain no NUL");
+            NVSDK_NGX_Parameter_SetVoidPointer(
+                self.parameters,
+                name.as_ptr(),
+                resource as *const _ as *const c_void,
+            );
+        };
+        set_resource("DLSSNR.Color", &color);
+        set_resource("DLSSNR.Output", &output);
+        set_resource("DLSSNR.Depth", &depth);
+        set_resource("DLSSNR.MVec", &motion);
+        for (prefix, resource) in [
+            ("Color", &color),
+            ("Output", &output),
+            ("Depth", &depth),
+            ("MVec", &motion),
+        ] {
+            set_u32(&format!("DLSSNR.{prefix}.SubrectBase.X"), 0);
+            set_u32(&format!("DLSSNR.{prefix}.SubrectBase.Y"), 0);
+            set_u32(
+                &format!("DLSSNR.{prefix}.SubrectDimensions.Width"),
+                resource.width,
+            );
+            set_u32(
+                &format!("DLSSNR.{prefix}.SubrectDimensions.Height"),
+                resource.height,
+            );
+        }
+        set_f32("DLSSNR.MVecScaleX", 1.0);
+        set_f32("DLSSNR.MVecScaleY", 1.0);
+        set_u32("DLSSNR.Reset", 0);
+        set_u32("DLSSNR.DepthInverted", 1);
+        set_u32("DLSSNR.Enabled", 1);
+        set_f32("DLSSNR.Intensity", DLSSNR_INTENSITY);
+        set_f32("DLSSNR.GlobalTone", 0.0);
+        set_f32("DLSSNR.LocalTone", 0.0);
+        set_f32("DLSSNR.LocalStructure", 1.6);
+        let result = (self.evaluate_feature)(command_buffer, feature, self.parameters, ptr::null());
+        (result == NGX_SUCCESS).then_some(()).ok_or(result)
+    }
+}
+
+/// # Safety
+/// `adapter`, `texture`, and `view` must be live Vulkan objects on the render thread.
+pub unsafe fn resource(
+    adapter: &wgpu::Adapter,
+    texture: &wgpu::Texture,
+    view: &wgpu::TextureView,
+) -> Option<ResourceVk> {
+    use wgpu::hal::api::Vulkan;
+
+    let view = unsafe { view.as_hal::<Vulkan>()?.raw_handle().as_raw() };
+    let image = unsafe { texture.as_hal::<Vulkan>()?.raw_handle().as_raw() };
+    let format = unsafe { adapter.as_hal::<Vulkan>()? }
+        .texture_format_as_raw(texture.format())
+        .as_raw();
+    Some(ResourceVk {
+        view,
+        image,
+        aspect: if texture.format().is_depth_stencil_format() {
+            0x2
+        } else {
+            0x1
+        },
+        base_mip: 0,
+        level_count: 1,
+        base_layer: 0,
+        layer_count: 1,
+        format: format as u32,
+        width: texture.width(),
+        height: texture.height(),
+        type_: 0,
+        read_write: 0,
+    })
 }
 
 /// # Safety

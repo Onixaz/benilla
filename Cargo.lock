@@ -683,6 +683,7 @@ version = "0.2.0"
 dependencies = [
  "avian3d",
  "benilla-assets",
+ "benilla-dlss5",
  "benilla-formats",
  "benilla-wmo",
  "bevy",
