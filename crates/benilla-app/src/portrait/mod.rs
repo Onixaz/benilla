@@ -52,7 +52,9 @@ use booth::{
     BoothBillboardSpec, BoothEffects, BoothInstance, BoothMotion, BoothPart, BoothRider,
 };
 mod dressup;
-pub(crate) use dressup::{DressUpBake, DressUpLook, DressUpPreview};
+pub(crate) use dressup::{
+    pool_slot, DressUpBake, DressUpLook, DressUpPreview, PaneDressUps, PaneView,
+};
 mod glue_booth;
 pub(crate) use glue_booth::{
     CreateLook, GhostKit, GlueLook, GluePetBake, GluePreview, GluePreviewBake, GlueScene, PetLook,
@@ -149,6 +151,10 @@ pub(crate) const UI_MODELS_LAYER: usize = MINIMAP_COMPOSITE_LAYER + 1;
 pub(crate) const UI_MODEL_CAM_LAYER_BASE: usize = UI_MODELS_LAYER + 1;
 /// How many perspective model panes draw at once; a ninth draws nothing.
 pub(crate) const UI_MODEL_CAM_LAYERS: usize = 8;
+/// The first pane dressing room's layer ([`dressup::DRESSUP_POOL`] of them): a `<DressUpModel>`
+/// no stock window claims, such as Turtle's transmog doll and its item tiles, gets a booth of its
+/// own while it draws.
+pub(super) const DRESSUP_POOL_LAYER_BASE: usize = UI_MODEL_CAM_LAYER_BASE + UI_MODEL_CAM_LAYERS;
 
 // A booth camera's layer is its identity, for rendering and for the emitter-to-camera match.
 const _: () = assert!(
@@ -167,7 +173,8 @@ const _: () = assert!(
         && WARM_ORTHO_LAYER > WARM_BOOTH_LAYER
         && MINIMAP_COMPOSITE_LAYER > WARM_ORTHO_LAYER
         && UI_MODELS_LAYER > MINIMAP_COMPOSITE_LAYER
-        && UI_MODEL_CAM_LAYER_BASE > UI_MODELS_LAYER,
+        && UI_MODEL_CAM_LAYER_BASE > UI_MODELS_LAYER
+        && DRESSUP_POOL_LAYER_BASE >= UI_MODEL_CAM_LAYER_BASE + UI_MODEL_CAM_LAYERS,
     "booth render layers must be distinct — see GLUE_LAYER"
 );
 const _: () = assert!(
@@ -654,6 +661,8 @@ pub(crate) struct BoothBridge<'w> {
     pub(crate) panes: ResMut<'w, BoothPanes>,
     /// The file panes' half: a tile request per pane, sampled back from the atlas.
     pub(crate) tiles: ResMut<'w, crate::ui_models::UiModelTiles>,
+    /// The pane dressing rooms: which pool booth an unclaimed `<DressUpModel>` samples.
+    pub(crate) pool: Res<'w, PaneDressUps>,
 }
 
 /// [`sync_portraits`]'s group inputs and overflow (it sits at Bevy's 16-parameter limit). The name
@@ -764,6 +773,7 @@ impl Plugin for PortraitPlugin {
             .init_resource::<glue_booth::GluePetBake>()
             .init_resource::<dressup::DressUpPreview>()
             .init_resource::<dressup::DressUpBake>()
+            .init_resource::<dressup::PaneDressUps>()
             .init_resource::<Booths>()
             .init_resource::<BoothPanes>()
             .init_resource::<GxAspect>()
@@ -1046,8 +1056,8 @@ fn setup_booths(
 
     // The glue booth: its own slot/layer/target, framed per-bake.
     glue_booth::spawn_glue_booth(&mut commands, &mut images, &mut portraits, &mut booths);
-    // The dressing room: tuple-driven like the glue booth, lit like the paper doll.
-    dressup::spawn_dressup_booth(&mut commands, &mut images, &mut portraits, &mut booths);
+    // The dressing rooms: tuple-driven like the glue booth, lit like the paper doll.
+    dressup::spawn_dressup_booths(&mut commands, &mut images, &mut portraits, &mut booths);
 }
 
 /// `true` while the `WOW_PORTRAIT_TEST` debug bake owns the booths (read once).

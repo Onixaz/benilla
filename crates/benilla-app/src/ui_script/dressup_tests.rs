@@ -161,7 +161,10 @@ fn ctrl_click_on_a_bag_item_opens_the_room_wearing_it() {
         "ctrl-click opened the dressing room"
     );
     assert_eq!(
-        s.take_dressup_intents(),
+        s.take_dressup_intents()
+            .into_iter()
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>(),
         vec![DressUpIntent::Dress, DressUpIntent::TryOn(117)],
         "re-dress first, then try the clicked item on"
     );
@@ -229,7 +232,10 @@ fn ctrl_clicking_a_chat_link_previews_it() {
     s.set_modifiers(false, false, false);
 
     assert_eq!(
-        s.take_dressup_intents(),
+        s.take_dressup_intents()
+            .into_iter()
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>(),
         vec![DressUpIntent::Dress, DressUpIntent::TryOn(117)],
         "a chat link's id reached TryOn through DressUpItemLink's own gsub"
     );
@@ -271,7 +277,10 @@ fn the_paper_doll_slots_preview_and_post_what_you_wear() {
     click(&mut s, "CharacterHeadSlot", "LeftButton");
     s.set_modifiers(false, false, false);
     assert_eq!(
-        s.take_dressup_intents(),
+        s.take_dressup_intents()
+            .into_iter()
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>(),
         vec![DressUpIntent::Dress, DressUpIntent::TryOn(1234)]
     );
 
@@ -353,7 +362,13 @@ fn reset_re_dresses_close_empties_and_the_arrows_spin_the_pane() {
     );
 
     s.run("DressUpFrameResetButton:Click()").unwrap();
-    assert_eq!(s.take_dressup_intents(), vec![DressUpIntent::Dress]);
+    assert_eq!(
+        s.take_dressup_intents()
+            .into_iter()
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>(),
+        vec![DressUpIntent::Dress]
+    );
     assert_eq!(
         s.take_sounds(),
         vec![SoundRequest::KitName("gsTitleOptionOK".into())],

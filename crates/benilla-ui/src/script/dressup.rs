@@ -8,7 +8,7 @@ use mlua::{Lua, Table, Value};
 
 use super::object::frame_handle_of;
 use super::Model;
-use crate::widget::FrameKind;
+use crate::widget::{FrameHandle, FrameKind};
 
 /// Registry key of the `DressUpModel` method table, its own three; the rest come by the chain.
 pub(super) const REG_DRESSUPMODEL_METHODS: &str = "__benilla_dressupmodel_methods";
@@ -31,17 +31,19 @@ pub enum DressUpIntent {
 }
 
 impl super::UiScript {
-    /// Drain the dressing room's intents, oldest first; the app applies them in order.
-    pub fn take_dressup_intents(&mut self) -> Vec<DressUpIntent> {
+    /// Drain the dressing rooms' intents with the pane each was made on, oldest first; the app
+    /// applies them in order. Each `DressUpModel` widget is its own room: the reference clones a
+    /// model per widget (`0x5059a0`).
+    pub fn take_dressup_intents(&mut self) -> Vec<(FrameHandle, DressUpIntent)> {
         std::mem::take(&mut self.model_mut().dressup_intents)
     }
 }
 
-fn queue(lua: &Lua, intent: DressUpIntent) {
+fn queue(lua: &Lua, pane: FrameHandle, intent: DressUpIntent) {
     lua.app_data_mut::<Model>()
         .expect("model app_data")
         .dressup_intents
-        .push(intent);
+        .push((pane, intent));
 }
 
 /// Queue the rebuild when `PlayerModel`'s `SetUnit`/`RefreshUnit` lands on a `DressUpModel`.
@@ -54,7 +56,7 @@ pub(super) fn redress_if_dressup(lua: &Lua, this: &Table) -> mlua::Result<()> {
         .frame(h)
         .is_some_and(|f| f.kind == FrameKind::DressUpModel);
     if is_dressup {
-        queue(lua, DressUpIntent::Dress);
+        queue(lua, h, DressUpIntent::Dress);
     }
     Ok(())
 }
@@ -81,8 +83,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "Undress",
         lua.create_function(|lua, this: Table| {
-            frame_handle_of(lua, &this)?;
-            queue(lua, DressUpIntent::Undress);
+            let h = frame_handle_of(lua, &this)?;
+            queue(lua, h, DressUpIntent::Undress);
             Ok(())
         })?,
     )?;
@@ -91,8 +93,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "Dress",
         lua.create_function(|lua, this: Table| {
-            frame_handle_of(lua, &this)?;
-            queue(lua, DressUpIntent::Dress);
+            let h = frame_handle_of(lua, &this)?;
+            queue(lua, h, DressUpIntent::Dress);
             Ok(())
         })?,
     )?;
@@ -102,10 +104,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "TryOn",
         lua.create_function(|lua, (this, item): (Table, Value)| {
-            frame_handle_of(lua, &this)?;
+            let h = frame_handle_of(lua, &this)?;
             if let Ok(id) = u32::try_from(item_arg(&item)) {
                 if id != 0 {
-                    queue(lua, DressUpIntent::TryOn(id));
+                    queue(lua, h, DressUpIntent::TryOn(id));
                 }
             }
             Ok(())
@@ -189,8 +191,11 @@ mod tests {
             "#,
         )
         .unwrap();
+        let taken = s.take_dressup_intents();
+        let dm = taken.first().expect("an intent").0;
+        assert!(taken.iter().all(|(h, _)| *h == dm), "every intent names DM");
         assert_eq!(
-            s.take_dressup_intents(),
+            taken.into_iter().map(|(_, i)| i).collect::<Vec<_>>(),
             vec![
                 DressUpIntent::Dress,
                 DressUpIntent::TryOn(117),
@@ -207,5 +212,41 @@ mod tests {
         // Its yaw is its own facing, read by name like every other pane's.
         s.run("DM:SetRotation(0.61)").unwrap();
         assert!((s.model_pane_facing("DM") - 0.61).abs() < 1e-6);
+    }
+
+    /// Two widgets are two rooms: an intent names its own pane, as each widget clones its own
+    /// model (`0x5059a0`); Turtle's transmog tiles each try on a different item.
+    #[test]
+    fn each_dress_up_model_queues_for_itself() {
+        let mut s = room();
+        s.run(
+            r#"
+            dm2 = CreateFrame("DressUpModel", "DM2", UIParent)
+            DM:TryOn(1) dm2:TryOn(2) DM:Undress()
+            "#,
+        )
+        .unwrap();
+        let taken = s.take_dressup_intents();
+        assert_eq!(taken.len(), 3);
+        assert_eq!(taken[0].0, taken[2].0, "DM's two intents name one pane");
+        assert_ne!(taken[0].0, taken[1].0, "DM2's names another");
+        assert_eq!(s.frame_name(taken[1].0).as_deref(), Some("DM2"));
+    }
+
+    /// The camera freezes at the unit's ready edge through the root as it stands (`0x505890`):
+    /// a `SetPosition` before `SetUnit` is in the camera, one after moves only the body.
+    #[test]
+    fn set_unit_freezes_the_camera_root() {
+        let s = room();
+        s.run(
+            r#"
+            DM:SetModelScale(4) DM:SetPosition(1, 2, 3) DM:SetUnit("player")
+            DM:SetPosition(5.8, 0.1, -1.2)
+            "#,
+        )
+        .unwrap();
+        let m = s.model_pane("DM").unwrap();
+        assert_eq!(m.camera_root, Some(((1.0, 2.0, 3.0), 4.0)));
+        assert_eq!(m.position, (5.8, 0.1, -1.2));
     }
 }

@@ -1185,7 +1185,13 @@ fn convert_entry(
                 }
                 return;
             }
-            let Some(slot) = name.as_deref().and_then(crate::portrait::model_pane_booth) else {
+            // A pane no stock window claims samples its own dressing room's booth, if it has one.
+            let Some(slot) = name
+                .as_deref()
+                .and_then(crate::portrait::model_pane_booth)
+                .map(str::to_string)
+                .or_else(|| booths.pool.slot_of(handle).map(crate::portrait::pool_slot))
+            else {
                 return;
             };
             // The aspect is published before the readiness check: the bake waits on the publish.
@@ -1193,10 +1199,10 @@ fn convert_entry(
                 booths
                     .panes
                     .0
-                    .insert(slot.to_string(), rect.width() / rect.height());
+                    .insert(slot.clone(), rect.width() / rect.height());
             }
             // The bake is premultiplied; the 2D stand-in while a model streams is straight alpha.
-            let (handle, premultiplied) = match booths.images.0.get(slot) {
+            let (handle, premultiplied) = match booths.images.0.get(&slot) {
                 Some(PortraitSource::Live(h)) => (Some(h.clone()), true),
                 Some(PortraitSource::File(p)) => (
                     assets.as_mut().and_then(|a| a.sprite_texture(p, images)),
@@ -1672,6 +1678,7 @@ mod clip_plumb_tests {
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
         app.init_resource::<crate::portrait::BoothPanes>();
+        app.init_resource::<crate::portrait::PaneDressUps>();
         app.init_resource::<crate::ui_models::UiModelTiles>();
         app.init_resource::<crate::minimap::MinimapWidget>();
         app.init_resource::<crate::ui_script::UiFrameCost>();
@@ -1758,6 +1765,7 @@ mod clip_plumb_tests {
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
         app.init_resource::<crate::portrait::BoothPanes>();
+        app.init_resource::<crate::portrait::PaneDressUps>();
         app.init_resource::<crate::ui_models::UiModelTiles>();
         app.init_resource::<crate::minimap::MinimapWidget>();
         app.init_resource::<crate::ui_script::UiFrameCost>();
@@ -1952,6 +1960,7 @@ mod extract_gate_tests {
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
         app.init_resource::<crate::portrait::BoothPanes>();
+        app.init_resource::<crate::portrait::PaneDressUps>();
         app.init_resource::<crate::ui_models::UiModelTiles>();
         app.init_resource::<crate::minimap::MinimapWidget>();
         app.init_resource::<crate::ui_script::UiFrameCost>();

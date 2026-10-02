@@ -869,6 +869,14 @@ impl UiScript {
             .any(|(_, f)| f.name.as_deref() == Some(name) && f.effective_visible)
     }
 
+    /// Whether frame `h` is shown with every ancestor; false for a stale handle.
+    pub fn frame_visible_at(&self, h: crate::widget::FrameHandle) -> bool {
+        self.model_ref()
+            .arena
+            .frame(h)
+            .is_some_and(|f| f.effective_visible)
+    }
+
     /// The named frame's effective alpha while it is effectively visible: the app's minimap ping
     /// sprite follows the stock `MiniMapPing` `<Model>` this way.
     pub fn frame_effective_alpha(&self, name: &str) -> Option<f32> {

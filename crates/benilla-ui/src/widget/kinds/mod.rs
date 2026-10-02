@@ -252,6 +252,10 @@ pub struct ModelState {
     pub camera: Option<u32>,
     /// `SetPosition`: the model's offset within the pane's scene.
     pub position: (f32, f32, f32),
+    /// A `PlayerModel` pane's camera root: the `SetPosition` and `SetModelScale` the unit's ready
+    /// edge (`0x505890`) froze camera 1 through, facing zeroed, so a later `SetPosition` moves the
+    /// body in front of a still camera. `None` until a `SetUnit`/`RefreshUnit`.
+    pub camera_root: Option<((f32, f32, f32), f32)>,
     pub light: ModelLight,
     /// `SetFogColor` as the reference stores it, one packed `0xAARRGGBB` dword, so a round trip
     /// keeps 8 bits a channel; the ctor's `0xffff_ffff` reads back as `1, 1, 1, 1`.
@@ -330,6 +334,7 @@ impl Default for ModelState {
             camera_pending: Some(0),
             camera: None,
             position: (0.0, 0.0, 0.0),
+            camera_root: None,
             light: ModelLight::default(),
             fog_color: 0xffff_ffff,
             fog: false,

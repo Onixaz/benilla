@@ -18,7 +18,8 @@ use super::{
     aim, body_frame, booth_anchors, new_target_image, spawn_booth_effects, spawn_booth_model,
     wake_booth, Booth, BoothBillboardSpec, BoothCam, BoothEffects, BoothInstance, BoothMotion,
     BoothPart, BoothRider, BoothTwins, Booths, PortraitImages, PortraitSource, PreviewBillboard,
-    PreviewEffects, PreviewPart, PreviewRider, BOOTH_SETTLE_FRAMES, DRESSUP_LAYER, PAPERDOLL_SIZE,
+    PreviewEffects, PreviewPart, PreviewRider, BOOTH_SETTLE_FRAMES, DRESSUP_LAYER,
+    DRESSUP_POOL_LAYER_BASE, PAPERDOLL_SIZE,
 };
 
 /// The dressing-room booth's key in [`PortraitImages`] and [`Booths`].
@@ -76,27 +77,130 @@ pub(crate) struct DressUpBake {
     pub(crate) revision: u64,
 }
 
-/// Stand the dressing-room booth up: a [`PAPERDOLL_SIZE`]² target with no glow on its own layer,
-/// framed per bake, and transparent.
-pub(super) fn spawn_dressup_booth(
+/// How many unclaimed `<DressUpModel>` panes draw at once: Turtle's transmog page shows its doll
+/// and fifteen item tiles. A pane past the pool draws nothing.
+pub(crate) const DRESSUP_POOL: usize = 16;
+
+/// The key of pool booth `i` in [`PortraitImages`], [`Booths`] and [`super::BoothPanes`].
+pub(crate) fn pool_slot(i: usize) -> String {
+    format!("{DRESSUP_SLOT}{i}")
+}
+
+/// A pane's view in `SetPosition` units: where the body stands now and the root camera 1 was
+/// frozen through ([`benilla_ui::widget::ModelState::camera_root`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct PaneView {
+    pub(crate) position: Vec3,
+    pub(crate) scale: f32,
+    pub(crate) camera_position: Vec3,
+    pub(crate) camera_scale: f32,
+}
+
+impl PaneView {
+    /// The camera offset and the body root, in camera-1 model units. The widget's root is
+    /// `T(pos·L)·R(facing)·S(G·modelScale·L)` (`0x76d1a0`, `G` the
+    /// [`super::framing::pane_model_scale`], `L` the effective scale) and camera 1 was published
+    /// through it with the facing zeroed (`0x505890`); dividing both by the frozen scale leaves
+    /// `L` out.
+    pub(super) fn rig(&self, g: f32, yaw: f32) -> (Vec3, Transform) {
+        let s0 = (g * self.camera_scale).max(1e-4);
+        let to_bevy = |p: Vec3| benilla_assets::coords::wow_to_bevy((p / s0).to_array());
+        let root = Transform {
+            translation: to_bevy(self.position),
+            rotation: Quat::from_rotation_y(yaw),
+            scale: Vec3::splat(self.scale / self.camera_scale.max(1e-4)),
+        };
+        (to_bevy(self.camera_position), root)
+    }
+}
+
+/// One pool booth's pane and its look, assembly and bake memory.
+#[derive(Default)]
+pub(crate) struct PaneDress {
+    /// The `<DressUpModel>` this booth draws; `None` while free.
+    pub(crate) pane: Option<benilla_ui::widget::FrameHandle>,
+    pub(crate) preview: DressUpPreview,
+    pub(crate) view: Option<PaneView>,
+    pub(crate) bake: DressUpBake,
+    /// The assembly's memory ([`crate::entities`]): the look last built, and whether it finished.
+    pub(crate) built_look: Option<DressUpLook>,
+    pub(crate) built: bool,
+    /// What [`sync_dressup_booth`] last staged, and whether a bake stands.
+    synced: Option<Synced>,
+    staged: bool,
+}
+
+/// The pane dressing rooms, one booth each ([`DRESSUP_POOL`]).
+#[derive(Resource)]
+pub(crate) struct PaneDressUps(pub(crate) Vec<PaneDress>);
+
+impl Default for PaneDressUps {
+    fn default() -> Self {
+        Self((0..DRESSUP_POOL).map(|_| PaneDress::default()).collect())
+    }
+}
+
+impl PaneDressUps {
+    /// The pool booth drawing `pane`.
+    pub(crate) fn slot_of(&self, pane: benilla_ui::widget::FrameHandle) -> Option<usize> {
+        self.0.iter().position(|d| d.pane == Some(pane))
+    }
+
+    /// The booth of `pane`, or a free one; `None` when the pool is full.
+    pub(crate) fn claim(&mut self, pane: benilla_ui::widget::FrameHandle) -> Option<usize> {
+        if let Some(i) = self.slot_of(pane) {
+            return Some(i);
+        }
+        let i = self.0.iter().position(|d| d.pane.is_none())?;
+        self.0[i].pane = Some(pane);
+        Some(i)
+    }
+
+    /// Free the booth of `pane` and empty its stage.
+    pub(crate) fn release(&mut self, pane: benilla_ui::widget::FrameHandle) {
+        if let Some(i) = self.slot_of(pane) {
+            let d = &mut self.0[i];
+            d.pane = None;
+            d.preview.look = None;
+            d.view = None;
+        }
+    }
+}
+
+/// Stand the dressing-room booths up, the stock room and every pool booth: a
+/// [`PAPERDOLL_SIZE`]² target with no glow on its own layer, framed per bake, and transparent.
+pub(super) fn spawn_dressup_booths(
     commands: &mut Commands,
     images: &mut Assets<Image>,
     portraits: &mut PortraitImages,
     booths: &mut Booths,
 ) {
+    let pool = (0..DRESSUP_POOL).map(|i| (pool_slot(i), DRESSUP_POOL_LAYER_BASE + i));
+    for (slot, layer) in std::iter::once((DRESSUP_SLOT.to_string(), DRESSUP_LAYER)).chain(pool) {
+        spawn_dressup_booth(commands, images, portraits, booths, slot, layer);
+    }
+}
+
+fn spawn_dressup_booth(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    portraits: &mut PortraitImages,
+    booths: &mut Booths,
+    slot: String,
+    layer_index: usize,
+) {
     let image = images.add(new_target_image(PAPERDOLL_SIZE));
-    portraits.0.insert(
-        DRESSUP_SLOT.to_string(),
-        PortraitSource::Live(image.clone()),
-    );
-    let layer = RenderLayers::layer(DRESSUP_LAYER);
+    portraits
+        .0
+        .insert(slot.clone(), PortraitSource::Live(image.clone()));
+    let layer = RenderLayers::layer(layer_index);
     let root = commands
         .spawn((Transform::IDENTITY, Visibility::Visible, layer.clone()))
         .id();
     commands.spawn((
         super::booth_view_shape(),
         Camera {
-            order: -100 + DRESSUP_LAYER as isize,
+            order: -100 + layer_index as isize,
             // Transparent: `<DressUpModel>` draws only its model, and the room behind it is the
             // window's `DressUpBackground-<Race>` art at a lower frame level, which only
             // compositing can show through.
@@ -113,10 +217,10 @@ pub(super) fn spawn_dressup_booth(
             ..default()
         }),
         layer.clone(),
-        BoothCam(DRESSUP_SLOT.to_string()),
+        BoothCam(slot.clone()),
     ));
     booths.0.insert(
-        DRESSUP_SLOT.to_string(),
+        slot,
         Booth {
             layer,
             root,
@@ -140,73 +244,151 @@ pub(super) fn spawn_dressup_booth(
     );
 }
 
-/// Bake the assembled look as [`super::sync_body_booth`] does, and spin it to the pane's yaw. The
-/// assembly holds the weapons, so the hands close on them (`CloseHand` `0x479660`).
+/// What a dressing-room booth last staged: the bake revision, the yaw and the pane view.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct Synced {
+    revision: u64,
+    yaw: f32,
+    view: Option<PaneView>,
+}
+
+/// The shared inputs of the dressing rooms [`sync_dressup_booth`] stages.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct RoomStage<'w, 's> {
+    commands: Commands<'w, 's>,
+    booths: ResMut<'w, Booths>,
+    framing: super::BoothFraming<'w>,
+    booth_light: ResMut<'w, BoothLight>,
+    materials: ResMut<'w, Assets<WowModelMaterial>>,
+    creatures: Option<Res<'w, Creatures>>,
+    anim_data: Option<Res<'w, crate::creature_anim::AnimData>>,
+    cams: Query<
+        'w,
+        's,
+        (
+            &'static BoothCam,
+            &'static mut Transform,
+            &'static mut Projection,
+        ),
+    >,
+    palettes: ResMut<'w, benilla_world::rig_palette::RigPalettes>,
+}
+
+/// Bake each dressing room's assembled look as [`super::sync_body_booth`] does, and spin it to its
+/// pane's yaw: the stock room, then every pool booth. The assembly holds the weapons, so the hands
+/// close on them (`CloseHand` `0x479660`).
 pub(super) fn sync_dressup_booth(
-    mut commands: Commands,
+    mut stage: RoomStage,
     preview: Res<DressUpPreview>,
     bake: Res<DressUpBake>,
-    mut booths: ResMut<Booths>,
-    panes: Res<super::BoothPanes>,
-    mut booth_light: ResMut<BoothLight>,
-    mut materials: ResMut<Assets<WowModelMaterial>>,
-    creatures: Option<Res<Creatures>>,
-    anim_data: Option<Res<crate::creature_anim::AnimData>>,
-    mut cams: Query<(&BoothCam, &mut Transform, &mut Projection)>,
-    mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
+    mut pool: ResMut<PaneDressUps>,
     mut env_cache: Local<Option<bool>>,
-    mut last: Local<Option<(u64, f32)>>,
+    mut last: Local<Option<Synced>>,
     // Whether a bake stands on the stage; `Booth::baked` keys the mirrored booths, not this one.
     mut staged: Local<bool>,
 ) {
     if super::test_mode(&mut env_cache) {
         return; // the test bake owns the booths
     }
-    let Some(booth) = booths.0.get_mut(DRESSUP_SLOT) else {
+    sync_room(
+        &mut stage,
+        DRESSUP_SLOT,
+        preview.yaw,
+        &bake,
+        None,
+        &mut last,
+        &mut staged,
+    );
+    for (i, d) in pool.0.iter_mut().enumerate() {
+        let PaneDress {
+            preview,
+            view,
+            bake,
+            synced,
+            staged,
+            ..
+        } = d;
+        sync_room(
+            &mut stage,
+            &pool_slot(i),
+            preview.yaw,
+            bake,
+            *view,
+            synced,
+            staged,
+        );
+    }
+}
+
+fn sync_room(
+    stage: &mut RoomStage,
+    slot: &str,
+    yaw: f32,
+    bake: &DressUpBake,
+    view: Option<PaneView>,
+    last: &mut Option<Synced>,
+    staged: &mut bool,
+) {
+    let RoomStage {
+        commands,
+        booths,
+        framing,
+        booth_light,
+        materials,
+        creatures,
+        anim_data,
+        cams,
+        palettes,
+    } = stage;
+    let Some(booth) = booths.0.get_mut(slot) else {
         return;
     };
     // The pane's aspect, latched while on screen: the dressing room's is 316×351, not square.
-    let aspect = panes.0.get(DRESSUP_SLOT).copied().unwrap_or(booth.aspect);
-    let (last_rev, last_yaw) = last.unwrap_or((u64::MAX, f32::NAN));
-    let rebake = last_rev != bake.revision || booth.aspect != aspect;
-    if !rebake && last_yaw == preview.yaw {
+    let aspect = framing.panes.0.get(slot).copied().unwrap_or(booth.aspect);
+    let now = Synced {
+        revision: bake.revision,
+        yaw,
+        view,
+    };
+    let rebake = last.is_none_or(|l| l.revision != bake.revision) || booth.aspect != aspect;
+    if !rebake && *last == Some(now) {
         return;
     }
     booth.aspect = aspect;
 
-    if rebake {
+    if bake.parts.is_empty() {
         // Nothing to show: empty the stage, and wake only if something stood there, so an
         // already-empty stage at startup costs no booth passes.
-        if bake.parts.is_empty() {
-            if *staged {
-                commands.entity(booth.root).despawn_related::<Children>();
-                booth.baked = None;
-                booth.wake = BOOTH_SETTLE_FRAMES;
-                booth.live = false;
-                booth.pending.clear();
-                // The despawn reaped meshes and anchors; the rig state on the root needs its own.
-                super::clear_booth_rig(&mut commands, booth.root);
-                booth.rigged = false;
-                booth.parked = false;
-                *staged = false;
-            }
-            *last = Some((bake.revision, preview.yaw));
-            return;
+        if *staged {
+            commands.entity(booth.root).despawn_related::<Children>();
+            booth.baked = None;
+            booth.wake = BOOTH_SETTLE_FRAMES;
+            booth.live = false;
+            booth.pending.clear();
+            // The despawn reaped meshes and anchors; the rig state on the root needs its own.
+            super::clear_booth_rig(commands, booth.root);
+            booth.rigged = false;
+            booth.parked = false;
+            *staged = false;
         }
-        // Rig and framing come from the display cache the assembly gated on; if not ready,
-        // leave `last` alone and retry next frame.
-        let Some(creatures) = creatures.as_deref() else {
-            return;
-        };
-        let (Some(rig), Some(anchors)) = (
-            creatures.display_rig(bake.display_id),
-            booth_anchors(Some(creatures), Some(bake.display_id)),
-        ) else {
-            booth.wake = booth.wake.max(BOOTH_SETTLE_FRAMES);
-            return;
-        };
-        let mut relight =
-            |m: &Handle<WowModelMaterial>| booth_light.pane.variant(m, &mut materials);
+        *last = Some(now);
+        return;
+    }
+    // Rig and framing come from the display cache the assembly gated on; if not ready, leave
+    // `last` alone and retry next frame.
+    let Some(creatures) = creatures.as_deref() else {
+        return;
+    };
+    let (Some(rig), Some(anchors)) = (
+        creatures.display_rig(bake.display_id),
+        booth_anchors(Some(creatures), Some(bake.display_id)),
+    ) else {
+        booth.wake = booth.wake.max(BOOTH_SETTLE_FRAMES);
+        return;
+    };
+
+    if rebake || !*staged {
+        let mut relight = |m: &Handle<WowModelMaterial>| booth_light.pane.variant(m, materials);
         let booth_parts: Vec<BoothPart> = bake
             .parts
             .iter()
@@ -250,8 +432,8 @@ pub(super) fn sync_dressup_booth(
         }
         commands.entity(booth.root).despawn_related::<Children>();
         let mut booth_rig = spawn_booth_model(
-            &mut commands,
-            &mut palettes,
+            commands,
+            palettes,
             booth.root,
             booth.layer.clone(),
             &booth_parts,
@@ -267,7 +449,7 @@ pub(super) fn sync_dressup_booth(
             BoothInstance::default(),
         );
         let (fx_emitters, _) = spawn_booth_effects(
-            &mut commands,
+            commands,
             &mut booth_rig,
             &booth.layer,
             booth_light.pane.buffer.as_ref(),
@@ -287,15 +469,15 @@ pub(super) fn sync_dressup_booth(
         booth.live = true;
         // A fresh bake is animated; the park state is the new rig's.
         booth.rigged = booth_rig.rigged();
-        booth_rig.finish(&mut commands);
+        booth_rig.finish(commands);
         booth.parked = false;
         *staged = true;
-        aim(&mut cams, DRESSUP_SLOT, &body_frame(&anchors, aspect));
         // `WOW_BOOTH_LOG=1`: one line per committed bake, as `super::log_bake` for the mirrored
         // booths.
         if super::booth_log() {
             eprintln!(
-                "[booth] dressup bake parts={} riders={} billboards={} fx={} rev={} aspect={aspect:.3}",
+                "[booth] {slot} bake parts={} riders={} billboards={} fx={} rev={} \
+                 aspect={aspect:.3} view={view:?}",
                 booth_parts.len(),
                 booth_riders.len(),
                 booth_billboards.len(),
@@ -305,7 +487,7 @@ pub(super) fn sync_dressup_booth(
         }
         wake_booth(
             booth,
-            &materials,
+            materials,
             booth_parts
                 .iter()
                 .map(|p| &p.material)
@@ -313,18 +495,34 @@ pub(super) fn sync_dressup_booth(
                 .chain(booth_billboards.iter().map(|b| &b.material)),
         );
     }
-    // The yaw, `Model:SetRotation`, applied on a fresh bake and on every spin. A spin also steps
-    // the feet ([`super::booth::drive_booth_turn`]), as the stock `Model_OnUpdate` held-arrow
-    // turn does; keyed on the yaw alone, since a re-bake is a `RefreshUnit` and does not turn.
-    if booth.turn.faced != Some(preview.yaw) {
-        if let Some(prev) = booth.turn.faced {
-            booth.turn.spun = Some(super::booth::turn_shuffle(prev, preview.yaw));
+
+    // Camera 1 as the pane's root stood when it froze; the stock rooms stand at the origin.
+    let mut cam = body_frame(&anchors, aspect);
+    let root = match view {
+        Some(view) => {
+            let g = super::framing::pane_model_scale(framing.gx.0);
+            let (offset, root) = view.rig(g, yaw);
+            cam.0.translation += offset;
+            // A pool pane turns by `SetFacing`, which plays no shuffle.
+            booth.turn.faced = Some(yaw);
+            root
         }
-        booth.turn.faced = Some(preview.yaw);
-    }
-    commands
-        .entity(booth.root)
-        .insert(Transform::from_rotation(Quat::from_rotation_y(preview.yaw)));
+        None => {
+            // The yaw, `Model:SetRotation`, applied on a fresh bake and on every spin. A spin also
+            // steps the feet ([`super::booth::drive_booth_turn`]), as the stock `Model_OnUpdate`
+            // held-arrow turn does; keyed on the yaw alone, since a re-bake is a `RefreshUnit`
+            // and does not turn.
+            if booth.turn.faced != Some(yaw) {
+                if let Some(prev) = booth.turn.faced {
+                    booth.turn.spun = Some(super::booth::turn_shuffle(prev, yaw));
+                }
+                booth.turn.faced = Some(yaw);
+            }
+            Transform::from_rotation(Quat::from_rotation_y(yaw))
+        }
+    };
+    aim(cams, slot, &cam);
+    commands.entity(booth.root).insert(root);
     booth.wake = booth.wake.max(BOOTH_SETTLE_FRAMES);
-    *last = Some((bake.revision, preview.yaw));
+    *last = Some(now);
 }

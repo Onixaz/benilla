@@ -4,14 +4,17 @@
 //! held triple through [`held_lanes`]. A tried-on item waits on its template ([`Items::template`]).
 //! There is no fit check: the reference previews whatever it is handed (`DressUpFrame.lua:2-16`).
 
+use std::collections::HashMap;
+
 use benilla_protocol::CharEnumItem;
 use benilla_ui::script::{DressUpIntent, UiScript};
+use benilla_ui::widget::FrameHandle;
 use bevy::prelude::*;
 
 use crate::entities::equip_slot;
 use crate::items::Items;
 use crate::net::{NetCommands, NetEntity, ObjectStore, SelfPlayer};
-use crate::portrait::{DressUpLook, DressUpPreview};
+use crate::portrait::{DressUpLook, DressUpPreview, PaneDressUps, PaneView};
 use crate::ui_script::UiFeed;
 
 /// Every rendered equipment slot, the set [`equip_slot`] can map an item into.
@@ -162,26 +165,44 @@ pub(crate) struct DressUpUiPlugin;
 impl Plugin for DressUpUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DressUpRoom>()
+            .init_resource::<PaneRooms>()
             .add_systems(Update, feed_dressup.in_set(UiFeed));
     }
 }
+
+/// The rooms of the `<DressUpModel>` panes no stock window claims, one per widget, as each clones
+/// its own model (`0x5059a0`): Turtle's transmog doll and item tiles. A room outlives its pane's
+/// hiding, as the widget keeps its model, and dies with the widget.
+#[derive(Resource, Default)]
+struct PaneRooms(HashMap<FrameHandle, DressUpRoom>);
 
 fn feed_dressup(
     script: Option<NonSendMut<UiScript>>,
     mut room: ResMut<DressUpRoom>,
     mut preview: ResMut<DressUpPreview>,
+    mut pane_rooms: ResMut<PaneRooms>,
+    mut pool: ResMut<PaneDressUps>,
     items: Res<Items>,
     commands: Res<NetCommands>,
     self_q: Query<(&ObjectStore, &NetEntity), With<SelfPlayer>>,
     // `ResMut` because the guild cache is lazy: a miss sends the `CMSG_GUILD_QUERY` whose answer
     // paints the tabard.
     mut guilds: ResMut<crate::ui_guild::GuildState>,
+    mut pool_full: Local<bool>,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    for intent in script.take_dressup_intents() {
-        room.apply(intent);
+    for (pane, intent) in script.take_dressup_intents() {
+        // The stock panes share the one stock booth; any other pane is a room of its own.
+        let stock = script
+            .frame_name(pane)
+            .is_some_and(|n| crate::portrait::model_pane_booth(&n).is_some());
+        if stock {
+            room.apply(intent);
+        } else {
+            pane_rooms.0.entry(pane).or_default().apply(intent);
+        }
     }
     // The room empties when neither the dressing room nor the auction house's
     // `AuctionDressUpFrame` is shown, read off the frames (the stock files carry no hook of ours).
@@ -198,18 +219,71 @@ fn feed_dressup(
 
     room.resolve_pending(&items, &commands);
 
+    let me = self_q.single().ok();
     // The crest comes off the guild cache this system holds, not the outfit `player_look` builds.
-    let look = match (room.open, self_q.single().ok()) {
+    // Asked only while a room is open, since a cache miss sends a query.
+    let any_open = room.open || pane_rooms.0.values().any(|r| r.open);
+    let emblem = me.filter(|_| any_open).and_then(|(store, _)| {
+        crate::ui_guild::unit_guild_emblem(&store.0, &mut guilds, &commands)
+    });
+    let look_of = |room: &DressUpRoom| match (room.open, me) {
         (true, Some((store, net))) => {
-            player_look(store, net, &room, &items, &commands).map(|l| DressUpLook {
-                emblem: crate::ui_guild::unit_guild_emblem(&store.0, &mut guilds, &commands),
-                ..l
-            })
+            player_look(store, net, room, &items, &commands).map(|l| DressUpLook { emblem, ..l })
         }
         _ => None,
     };
+    let look = look_of(&room);
     if preview.look != look {
         preview.look = look;
+    }
+
+    // A pane room draws through a pool booth only while its widget is shown.
+    pane_rooms
+        .0
+        .retain(|pane, _| script.model_pane_at(*pane).is_some());
+    for d in &mut pool.0 {
+        if d.pane.is_some_and(|p| !pane_rooms.0.contains_key(&p)) {
+            d.pane = None;
+            d.preview.look = None;
+            d.view = None;
+        }
+    }
+    for (pane, room) in &mut pane_rooms.0 {
+        room.resolve_pending(&items, &commands);
+        let Some(m) = script.model_pane_at(*pane) else {
+            continue;
+        };
+        if !room.open || !script.frame_visible_at(*pane) {
+            pool.release(*pane);
+            continue;
+        }
+        let Some(i) = pool.claim(*pane) else {
+            if !*pool_full {
+                *pool_full = true;
+                warn!(
+                    "dressup: more than {} DressUpModel panes shown; the rest draw nothing",
+                    pool.0.len()
+                );
+            }
+            continue;
+        };
+        let look = look_of(room);
+        let d = &mut pool.0[i];
+        d.preview.yaw = m.facing;
+        let (pos, scale) = m.camera_root.unwrap_or((m.position, m.scale));
+        let v3 = |p: (f32, f32, f32)| Vec3::new(p.0, p.1, p.2);
+        let view = Some(PaneView {
+            position: v3(m.position),
+            scale: m.scale,
+            camera_position: v3(pos),
+            camera_scale: scale,
+        });
+        if d.view != view {
+            d.view = view;
+        }
+        if d.preview.look != look {
+            d.preview.look = look;
+        }
     }
 }
 

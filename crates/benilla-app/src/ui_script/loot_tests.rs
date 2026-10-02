@@ -677,7 +677,10 @@ fn ctrl_and_shift_on_a_loot_row_preview_and_post_without_looting() {
     s.mouse_button(x, y, "LeftButton", false);
     s.set_modifiers(false, false, false);
     assert_eq!(
-        s.take_dressup_intents(),
+        s.take_dressup_intents()
+            .into_iter()
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>(),
         vec![DressUpIntent::Dress, DressUpIntent::TryOn(2589)],
         "re-dress first, then try the looted item on"
     );

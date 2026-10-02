@@ -35,7 +35,9 @@ use dress::{spawn_group, PartDress};
 pub(super) use merge::MergedFormsCache;
 mod preview;
 pub(crate) use preview::equip_slot;
-pub(super) use preview::{build_dressup_preview, build_glue_pet, build_glue_preview};
+pub(super) use preview::{
+    build_dressup_preview, build_glue_pet, build_glue_preview, build_pane_dressups,
+};
 #[cfg(test)]
 mod arrival_tests;
 mod redress;

@@ -26,7 +26,10 @@ use display::{
 
 /// Attaching a visual to each net entity: skeleton, animation, character geosets and skin, fade.
 mod attach;
-use attach::{attach_entity_visuals, build_dressup_preview, build_glue_pet, build_glue_preview};
+use attach::{
+    attach_entity_visuals, build_dressup_preview, build_glue_pet, build_glue_preview,
+    build_pane_dressups,
+};
 
 /// Composited body skins by look, built off the main thread.
 mod skin_composite;
@@ -648,8 +651,8 @@ impl Plugin for EntitiesPlugin {
                 // The select screen's pet, on its own latch so a slow pet model never holds the
                 // character back.
                 build_glue_pet,
-                // The dressing room's preview, the same assembly and latch.
-                build_dressup_preview,
+                // The dressing rooms' previews, the same assembly and latch.
+                (build_dressup_preview, build_pane_dressups),
                 attach_entity_visuals,
                 // A WMO GameObject's doodad props, spawned as each M2 lands.
                 resolve_wmo_gameobject_props,

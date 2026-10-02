@@ -527,6 +527,9 @@ fn playermodel_install(lua: &Lua) -> mlua::Result<()> {
             with_model(lua, &this, |m| {
                 m.unit = unit;
                 m.path = None;
+                // The clone of a resident unit model is ready at once (`0x710560`), so its ready
+                // edge freezes the camera here, through the pane's root as it stands.
+                m.camera_root = Some((m.position, m.scale));
             })?;
             // A dress-up pane rebuilds from the unit's live model, dropping try-ons (`0x5059a0`).
             super::dressup::redress_if_dressup(lua, &this)
@@ -538,7 +541,7 @@ fn playermodel_install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "RefreshUnit",
         lua.create_function(|lua, this: Table| {
-            with_model(lua, &this, |_| ())?;
+            with_model(lua, &this, |m| m.camera_root = Some((m.position, m.scale)))?;
             // The same worker as `SetUnit`'s (`0x505b50`).
             super::dressup::redress_if_dressup(lua, &this)
         })?,
@@ -571,6 +574,14 @@ impl crate::script::UiScript {
                 (Some(n), KindState::Model(m)) if n == name => Some(m.clone()),
                 _ => None,
             })
+    }
+
+    /// The scene state of the model pane `h`, for a pane the host knows only by handle.
+    pub fn model_pane_at(&self, h: FrameHandle) -> Option<ModelState> {
+        match &self.model_ref().arena.frame(h)?.kind_state {
+            KindState::Model(m) => Some(m.clone()),
+            _ => None,
+        }
     }
 
     /// A named pane's yaw in radians, 0.0 before the pane exists; the stock `Model_OnLoad` sets

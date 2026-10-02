@@ -845,7 +845,10 @@ fn reward_rows_preview_and_post_without_selecting_the_choice() {
     s.run("QuestRewardItem1:Click()").unwrap();
     s.set_modifiers(false, false, false);
     assert_eq!(
-        s.take_dressup_intents(),
+        s.take_dressup_intents()
+            .into_iter()
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>(),
         vec![
             benilla_ui::script::DressUpIntent::Dress,
             benilla_ui::script::DressUpIntent::TryOn(2299)

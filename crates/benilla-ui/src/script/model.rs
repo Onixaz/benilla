@@ -869,7 +869,7 @@ pub(crate) struct Model {
     /// `ClearInspectPlayer` ran; the app drops its inspect target.
     pub(crate) inspect_clear: bool,
     /// `DressUpModel` `SetUnit`, `Dress`, `Undress` and `TryOn` calls, applied in call order.
-    pub(crate) dressup_intents: Vec<super::dressup::DressUpIntent>,
+    pub(crate) dressup_intents: Vec<(crate::widget::FrameHandle, super::dressup::DressUpIntent)>,
     /// Tabard designs per `TabardModel`, the app's preview five, the host facts and queued calls.
     pub(crate) tabard_designs: HashMap<crate::widget::FrameHandle, [i32; 5]>,
     pub(crate) tabard_preview: Option<[i32; 5]>,

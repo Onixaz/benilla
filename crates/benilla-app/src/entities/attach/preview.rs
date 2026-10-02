@@ -13,8 +13,8 @@ use bevy::prelude::*;
 
 use crate::portrait::{
     BoothTwins, DressUpBake, DressUpLook, DressUpPreview, GhostKit, GlueLook, GluePetBake,
-    GluePreview, GluePreviewBake, PetLook, PreviewBillboard, PreviewEffects, PreviewPart,
-    PreviewRider,
+    GluePreview, GluePreviewBake, PaneDressUps, PetLook, PreviewBillboard, PreviewEffects,
+    PreviewPart, PreviewRider,
 };
 use benilla_assets::materials::WowModelMaterial;
 
@@ -310,25 +310,7 @@ pub(in crate::entities) fn build_dressup_preview(
     let Some(creatures) = creatures.as_deref() else {
         return;
     };
-    let spec = PreviewSpec {
-        display_id: look.display_id,
-        race: look.race,
-        sex: look.sex,
-        skin: look.skin,
-        face: look.face,
-        hair_style: look.hair_style,
-        hair_color: look.hair_color,
-        facial_hair: look.facial_hair,
-        equipment: look.equipment,
-        emblem: look.emblem,
-        // No hide flags: `crate::ui_dressup` already left out a hidden worn helm or cloak, as
-        // `SetUnit` (`0x505d70`) clones the live display pointers (`0x476cb0`), and a mask here
-        // would hide a tried-on one.
-        flags: 0,
-        // The ranged slot here only holds a try-on: `SetUnit` clones the live model, which shows
-        // a ranged weapon only while ranged-drawn, so `crate::ui_dressup` leaves a worn one out.
-        ranged_in_hand: true,
-    };
+    let spec = dressup_spec(&look);
     let Some(a) = assemble(
         &spec,
         &mut PreviewCtx {
@@ -368,6 +350,94 @@ pub(in crate::entities) fn build_dressup_preview(
         revision: bake.revision + 1,
     };
     state.built = true;
+}
+
+/// A dressing room's look as the assembly's spec.
+fn dressup_spec(look: &DressUpLook) -> PreviewSpec {
+    PreviewSpec {
+        display_id: look.display_id,
+        race: look.race,
+        sex: look.sex,
+        skin: look.skin,
+        face: look.face,
+        hair_style: look.hair_style,
+        hair_color: look.hair_color,
+        facial_hair: look.facial_hair,
+        equipment: look.equipment,
+        emblem: look.emblem,
+        // No hide flags: `crate::ui_dressup` already left out a hidden worn helm or cloak, as
+        // `SetUnit` (`0x505d70`) clones the live display pointers (`0x476cb0`), and a mask here
+        // would hide a tried-on one.
+        flags: 0,
+        // The ranged slot here only holds a try-on: `SetUnit` clones the live model, which shows
+        // a ranged weapon only while ranged-drawn, so `crate::ui_dressup` leaves a worn one out.
+        ranged_in_hand: true,
+    }
+}
+
+/// [`build_dressup_preview`] for each pane dressing room ([`PaneDressUps`]): Turtle's transmog doll
+/// and item tiles, each its own widget wearing its own try-ons.
+pub(in crate::entities) fn build_pane_dressups(
+    mut pool: ResMut<PaneDressUps>,
+    creatures: Option<Res<Creatures>>,
+    characters: Option<Res<Characters>>,
+    mut displays: Option<ResMut<ItemDisplays>>,
+    mut glows: Option<ResMut<ItemGlows>>,
+    sections: Option<Res<SkinSections>>,
+    mut images: ResMut<Assets<Image>>,
+    mut skin_composites: ResMut<SkinComposites>,
+    asset_server: Res<AssetServer>,
+    mut mats: benilla_world::model_render::M2BatchMaterials,
+) {
+    for d in &mut pool.0 {
+        if d.built_look != d.preview.look {
+            d.built_look = d.preview.look;
+            d.built = false;
+        }
+        if d.built {
+            continue;
+        }
+        let Some(look) = d.preview.look else {
+            if d.bake.look.is_some() || !d.bake.parts.is_empty() {
+                d.bake = DressUpBake {
+                    revision: d.bake.revision + 1,
+                    ..default()
+                };
+            }
+            d.built = true;
+            continue;
+        };
+        let Some(creatures) = creatures.as_deref() else {
+            return;
+        };
+        let Some(a) = assemble(
+            &dressup_spec(&look),
+            &mut PreviewCtx {
+                creatures,
+                characters: characters.as_deref(),
+                displays: displays.as_deref_mut(),
+                glows: glows.as_deref_mut(),
+                sections: sections.as_deref(),
+                images: &mut images,
+                skin_composites: &mut skin_composites,
+                asset_server: &asset_server,
+                mats: &mut mats,
+            },
+        ) else {
+            continue; // an item model is still loading: retry next frame
+        };
+        d.bake = DressUpBake {
+            look: Some(look),
+            display_id: look.display_id,
+            parts: a.parts,
+            riders: a.riders,
+            effects: a.effects,
+            billboards: a.billboards,
+            grip: a.grip,
+            revision: d.bake.revision + 1,
+        };
+        d.built = true;
+    }
 }
 
 /// The character-select ghost's `SpellVisualKit` row, hard-coded as in the reference: `0x47280f`

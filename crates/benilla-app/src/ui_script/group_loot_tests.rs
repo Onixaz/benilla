@@ -549,7 +549,10 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
     s.mouse_button(x, y, "LeftButton", false);
     s.set_modifiers(false, false, false);
     assert_eq!(
-        s.take_dressup_intents(),
+        s.take_dressup_intents()
+            .into_iter()
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>(),
         vec![DressUpIntent::Dress, DressUpIntent::TryOn(25)],
         "re-dress first, then try the rolled item on"
     );
