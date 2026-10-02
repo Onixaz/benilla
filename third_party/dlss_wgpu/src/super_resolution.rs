@@ -131,6 +131,10 @@ impl DlssSuperResolution {
                 exposure_scale.unwrap_or(1.0),
                 pre_exposure.unwrap_or(0.0),
             ),
+            DlssSuperResolutionExposure::Fixed {
+                exposure_scale,
+                pre_exposure,
+            } => (ptr::null_mut(), *exposure_scale, *pre_exposure),
             DlssSuperResolutionExposure::Automatic => (ptr::null_mut(), 0.0, 0.0),
         };
 
@@ -279,6 +283,14 @@ pub enum DlssSuperResolutionExposure<'a> {
         exposure_scale: Option<f32>,
         pre_exposure: Option<f32>,
     },
+    /// A fixed exposure with no exposure texture. This writes the SDK's scalar parameters
+    /// directly, which is suitable for a renderer that has no exposure pass.
+    Fixed {
+        /// The final exposure multiplier passed to NGX.
+        exposure_scale: f32,
+        /// The exposure that was already applied to the input color.
+        pre_exposure: f32,
+    },
     /// Auto-exposure handled by DLSS.
     Automatic,
 }
@@ -306,7 +318,8 @@ impl<'a> DlssSuperResolutionRenderParameters<'a> {
                 DlssSuperResolutionExposure::Manual { exposure, .. } => {
                     Some(resource_barrier(exposure))
                 }
-                DlssSuperResolutionExposure::Automatic => None,
+                DlssSuperResolutionExposure::Fixed { .. }
+                | DlssSuperResolutionExposure::Automatic => None,
             },
             self.bias.map(resource_barrier),
             Some(TextureTransition {

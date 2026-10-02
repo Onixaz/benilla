@@ -14,6 +14,20 @@ fn requested_from(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+/// Opt into the DLAA camera requirements without initializing NGX or adding Bevy's DLSS render
+/// nodes. It is deliberately mutually exclusive with [`requested`], so one launch answers
+/// whether temporal camera state alone changes the world image.
+fn camera_only_requested() -> bool {
+    camera_only_requested_from(
+        std::env::var("WOW_DLSS").ok().as_deref(),
+        std::env::var("WOW_DLSS_CAMERA_ONLY").ok().as_deref(),
+    )
+}
+
+fn camera_only_requested_from(dlss: Option<&str>, camera_only: Option<&str>) -> bool {
+    !requested_from(dlss) && requested_from(camera_only)
+}
+
 /// Whether this binary can honour the developer switch. A normal executable only reports the
 /// request and leaves its existing backend, MSAA, static-GX and liquid behavior untouched.
 pub fn enabled_build_requested() -> bool {
@@ -67,25 +81,108 @@ pub fn install_before_default_plugins(app: &mut App) {
 #[cfg(not(feature = "dlss"))]
 pub fn install_before_default_plugins(_app: &mut App) {}
 
-/// Adds the built-in Bevy DLSS renderer only after `DefaultPlugins` has created its render app.
-#[cfg(feature = "dlss")]
+/// Adds either the non-NGX camera-only diagnostic or the built-in DLSS renderer after
+/// `DefaultPlugins` has created its render app.
 pub fn install_after_default_plugins(app: &mut App) {
-    use bevy::anti_alias::dlss::DlssPlugin;
+    if camera_only_requested() {
+        app.add_plugins(DlssCameraOnlyPlugin);
+    }
 
-    if requested() {
-        app.add_plugins((DlssPlugin, DlssPrototypePlugin));
+    #[cfg(feature = "dlss")]
+    {
+        use bevy::anti_alias::dlss::DlssPlugin;
+
+        if requested() {
+            app.add_plugins((DlssPlugin, DlssPrototypePlugin));
+        }
+    }
+
+    #[cfg(not(feature = "dlss"))]
+    {
+        // This runs after LogPlugin, so an opt-in request always leaves an actionable fallback line.
+        if requested() {
+            warn!(
+                "DLSS: requested, but this executable lacks the `dlss` Cargo feature; using the normal renderer"
+            );
+        }
     }
 }
 
-/// Normal launches carry no DLSS systems or resources.
-#[cfg(not(feature = "dlss"))]
-pub fn install_after_default_plugins(_app: &mut App) {
-    // This runs after LogPlugin, so an opt-in request always leaves an actionable fallback line.
-    if requested() {
-        warn!(
-            "DLSS: requested, but this executable lacks the `dlss` Cargo feature; using the normal renderer"
+/// Marker for the one temporary camera-only diagnostic. It keeps the test state off every other
+/// camera, and makes the test's jitter driver independent of NVIDIA initialization.
+#[derive(Component)]
+struct DlssCameraOnly;
+
+struct DlssCameraOnlyPlugin;
+
+impl Plugin for DlssCameraOnlyPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            (configure_dlss_camera_only, advance_dlss_camera_only_jitter),
         );
     }
+}
+
+/// Reproduces the camera-side state Bevy DLSS uses for a DLAA view, but has no DLSS component,
+/// context, resolution override, or render-graph node. World cameras already receive `Hdr` and
+/// the two prepasses in `view::plugin`; inserting them again here makes the diagnostic explicit.
+fn configure_dlss_camera_only(
+    mut commands: Commands,
+    cameras: Query<Entity, (With<crate::view::WorldCamera>, Without<DlssCameraOnly>)>,
+) {
+    use bevy::{
+        core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass},
+        render::{
+            camera::{MipBias, TemporalJitter},
+            view::{Hdr, Msaa},
+        },
+    };
+
+    for entity in &cameras {
+        commands.entity(entity).insert((
+            DlssCameraOnly,
+            Hdr,
+            TemporalJitter::default(),
+            // DLAA's internal and output resolutions match, so `dlss_wgpu` suggests -1.0.
+            MipBias::default(),
+            DepthPrepass,
+            MotionVectorPrepass,
+            Msaa::Off,
+        ));
+        warn!(
+            "DLSS camera-only: WorldCamera has DLAA jitter, mip bias, depth/motion prepasses, and MSAA=Off; NGX evaluation is not running"
+        );
+    }
+}
+
+/// `dlss_wgpu` uses this eight-phase Halton sequence at a DLAA ratio of one. Keeping it here lets
+/// the camera-only run exercise the same moving projection without opening an NGX context.
+fn advance_dlss_camera_only_jitter(
+    mut cameras: Query<&mut bevy::render::camera::TemporalJitter, With<DlssCameraOnly>>,
+    mut frame: Local<u32>,
+) {
+    let offset = dlss_dlaa_jitter(*frame);
+    *frame = frame.wrapping_add(1);
+    for mut jitter in &mut cameras {
+        jitter.offset = offset;
+    }
+}
+
+fn dlss_dlaa_jitter(frame: u32) -> Vec2 {
+    let phase = frame % 8;
+    Vec2::new(halton(phase, 2), halton(phase, 3)) - 0.5
+}
+
+fn halton(mut index: u32, base: u32) -> f32 {
+    let mut value = 0.0;
+    let mut factor = 1.0;
+    while index > 0 {
+        factor /= base as f32;
+        value += factor * (index % base) as f32;
+        index /= base;
+    }
+    value
 }
 
 #[cfg(feature = "dlss")]
@@ -154,7 +251,7 @@ fn configure_world_camera(
     }
 
     if !state.support_reported {
-        info!("DLSS: Super Resolution supported; configuring WorldCamera in Quality mode");
+        info!("DLSS: Super Resolution supported; configuring WorldCamera in DLAA mode");
         state.support_reported = true;
     }
     for (entity, dlss) in &cameras {
@@ -163,7 +260,7 @@ fn configure_world_camera(
         }
         commands.entity(entity).insert((
             Dlss {
-                perf_quality_mode: DlssPerfQualityMode::Quality,
+                perf_quality_mode: DlssPerfQualityMode::Dlaa,
                 reset: true,
                 ..default()
             },
@@ -173,7 +270,7 @@ fn configure_world_camera(
         state.active = true;
         if !state.camera_reported {
             info!(
-                "DLSS prototype: WorldCamera only; MSAA=Off, static_gx=disabled, liquid surfaces=disabled"
+            "DLSS prototype: WorldCamera only; mode=DLAA; MSAA=Off, static_gx=disabled, liquid surfaces=disabled"
             );
             state.camera_reported = true;
         }
@@ -203,7 +300,7 @@ fn log_dlss_resolution(
         }
         *last = Some(pair);
         info!(
-            "DLSS: supported; mode=Quality; output={}x{}; internal={}x{}; backend={:?}; MSAA=Off; static_gx=disabled; liquid surfaces=disabled",
+            "DLSS: supported; mode=DLAA; output={}x{}; internal={}x{}; backend={:?}; MSAA=Off; static_gx=disabled; liquid surfaces=disabled",
             output.x,
             output.y,
             internal.0.x,
@@ -215,7 +312,8 @@ fn log_dlss_resolution(
 
 #[cfg(test)]
 mod tests {
-    use super::requested_from;
+    use super::{camera_only_requested_from, dlss_dlaa_jitter, requested_from};
+    use bevy::math::Vec2;
 
     #[test]
     fn only_the_explicit_developer_switch_requests_dlss() {
@@ -223,6 +321,20 @@ mod tests {
         for value in [None, Some(""), Some("0"), Some("true"), Some("quality")] {
             assert!(!requested_from(value));
         }
+    }
+
+    #[test]
+    fn camera_only_is_explicit_and_never_runs_beside_dlss() {
+        assert!(camera_only_requested_from(None, Some("1")));
+        assert!(!camera_only_requested_from(Some("1"), Some("1")));
+        assert!(!camera_only_requested_from(None, Some("0")));
+    }
+
+    #[test]
+    fn camera_only_uses_dlaas_eight_phase_halton_sequence() {
+        assert_eq!(dlss_dlaa_jitter(0), Vec2::splat(-0.5));
+        assert_eq!(dlss_dlaa_jitter(8), dlss_dlaa_jitter(0));
+        assert_ne!(dlss_dlaa_jitter(1), dlss_dlaa_jitter(0));
     }
 
     #[cfg(not(feature = "dlss"))]
