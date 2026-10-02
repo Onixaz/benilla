@@ -28,5 +28,13 @@ $neuralExecutable = Join-Path $release 'nvngx.dll'
 Copy-Item -LiteralPath $source -Destination $neuralExecutable -Force
 
 # NGX checks the image filename, not a loaded module. Keep benilla.exe untouched for normal runs.
-& $neuralExecutable @BenillaArgs
-exit $LASTEXITCODE
+# PowerShell's call operator resolves `.dll` through file associations, although this is an EXE
+# image with a deliberate NGX-required filename. `UseShellExecute = $false` calls CreateProcess
+# directly, which accepts the PE image without consulting that association table.
+$start = [System.Diagnostics.ProcessStartInfo]::new()
+$start.FileName = $neuralExecutable
+$start.UseShellExecute = $false
+$start.Arguments = if ($null -eq $BenillaArgs) { '' } else { [string]::Join(' ', $BenillaArgs) }
+$process = [System.Diagnostics.Process]::Start($start)
+$process.WaitForExit()
+exit $process.ExitCode
