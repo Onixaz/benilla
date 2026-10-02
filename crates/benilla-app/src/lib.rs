@@ -312,6 +312,12 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
     // No `game://` source: the five UI shaders are compiled in by `crate::shaders`
     // (`embedded://benilla_app/shaders/…`), so no build-machine path reaches the binary.
 
+    // This is deliberately the historical Cargo opt-in, not a runtime environment toggle. The
+    // plugin must register Feature 18's Vulkan extensions before `DefaultPlugins` creates wgpu's
+    // device; normal builds do not link or initialize NGX at all.
+    #[cfg(feature = "dlss")]
+    app.add_plugins(benilla_dlss5::DlssNrPlugin::new(local_state::ngx_dir()));
+
     app.add_plugins(benilla_world::boot::tuned_default_plugins(Window {
         title: "benilla".into(),
         // Born in the player's display mode (`gxWindow` read straight off `config.toml`) rather

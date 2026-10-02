@@ -16,6 +16,9 @@ dev = ["benilla-assets/dev", "benilla-formats/dev", "benilla-world/dev", "dep:be
 tracy = ["bevy/trace_tracy"]
 # Writes every system's per-run span to `trace-<ts>.json` in the cwd.
 trace_chrome = ["bevy/trace_chrome"]
+# Keep the historical `--features dlss` developer switch. It enables Neural Rendering, not the
+# removed Super Resolution path.
+dlss = ["dep:benilla-dlss5"]
 [dependencies]
 anyhow.workspace = true
 # The EditBox clipboard, on the main thread as NSPasteboard requires; bevy_egui's 3.x.
@@ -42,6 +45,7 @@ benilla-assets = { path = "../benilla-assets", default-features = false }
 benilla-formats = { path = "../benilla-formats", default-features = false }
 benilla-protocol = { path = "../benilla-protocol" }
 benilla-world = { path = "../benilla-world", default-features = false }
+benilla-dlss5 = { path = "../benilla-dlss5", optional = true }
 # The CVar diff persisted in `benilla-config/config.toml`.
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

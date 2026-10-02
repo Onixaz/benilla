@@ -208,6 +208,13 @@ pub(crate) fn diagnostics_dir() -> Option<PathBuf> {
     home().map(|h| h.join("Diagnostics"))
 }
 
+/// `benilla-config/ngx/`: NGX's own local cache and scratch data. The runtime is external, but
+/// any state it writes still follows Benilla's one-local-folder policy.
+#[cfg(feature = "dlss")]
+pub(crate) fn ngx_dir() -> Option<PathBuf> {
+    home().map(|h| h.join("ngx"))
+}
+
 /// `benilla-config/Diagnostics/fps-journal.csv`: the FPS journal's rows while the `fpsJournal`
 /// CVar is on; a capture names its own path through `WOW_FPS_JOURNAL`.
 pub(crate) fn fps_journal_path() -> Option<PathBuf> {

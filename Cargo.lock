@@ -510,6 +510,7 @@ dependencies = [
  "assert_no_alloc",
  "avian3d",
  "benilla-assets",
+ "benilla-dlss5",
  "benilla-formats",
  "benilla-protocol",
  "benilla-srp",
@@ -581,6 +582,16 @@ name = "benilla-dbc"
 version = "0.2.0"
 dependencies = [
  "benilla-bytes",
+]
+
+[[package]]
+name = "benilla-dlss5"
+version = "0.2.0"
+dependencies = [
+ "ash",
+ "bevy",
+ "libloading",
+ "wgpu",
 ]
 
 [[package]]

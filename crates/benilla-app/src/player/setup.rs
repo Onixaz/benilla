@@ -34,6 +34,9 @@ fn spawn_fallback_camera(commands: &mut Commands, msaa: Msaa) {
     commands.spawn((
         Camera3d::default(),
         WorldCamera,
+        // Feature 18's lifetime is tied to the actual world view, never a portrait or UI camera.
+        #[cfg(feature = "dlss")]
+        benilla_dlss5::DlssNrCamera,
         // The player's level: `Camera` requires `Msaa`, which would default to `Sample4`.
         msaa,
         Hdr,
@@ -94,6 +97,8 @@ pub(super) fn setup_player(
         Camera3d::default(),
         // The portrait booths are `Camera3d`s too: viewer queries filter on this marker.
         WorldCamera,
+        #[cfg(feature = "dlss")]
+        benilla_dlss5::DlssNrCamera,
         // `gxMultisample` is read once: the reference latches it, pending until the next launch,
         // and a live swap would mismatch our post passes. `$WOW_MSAA` overrides it for a session.
         msaa.level(),

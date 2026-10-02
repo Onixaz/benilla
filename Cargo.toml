@@ -32,6 +32,9 @@ bevy = { version = "0.18.1", default-features = false, features = [
 ] }
 # For the `WOW_GPU_MS` meter's query set, which bevy 0.18 does not wrap; must match bevy's wgpu.
 wgpu = "27"
+# `benilla-dlss5` uses the same raw Vulkan types as Bevy's wgpu 27 backend.
+ash = "0.38"
+libloading = "0.8"
 clap = { version = "4.6.1", features = ["derive"] }
 sha1 = "0.10.6"
 
