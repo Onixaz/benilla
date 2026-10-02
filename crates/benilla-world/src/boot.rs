@@ -70,24 +70,5 @@ pub fn tuned_default_plugins(primary_window: Window) -> PluginGroupBuilder {
         // No gamepad input; 1.12's bindings are keyboard/mouse.
         .disable::<bevy::gilrs::GilrsPlugin>();
 
-    // Bevy compiles `DlssInitPlugin` into `DefaultPlugins` whenever its `dlss` feature is on.
-    // Benilla keeps DLSS runtime-opt-in, so replace that static entry with the manual initializer
-    // in `dlss::install_before_default_plugins`, which runs only for `WOW_DLSS=1`.
-    #[cfg(feature = "dlss")]
-    let plugins = plugins.disable::<bevy::anti_alias::dlss::DlssInitPlugin>();
-
-    // Bevy's DLSS integration registers NGX through raw Vulkan initialization. Only the
-    // experiment requests Vulkan; ordinary launches retain Bevy's normal backend selection.
-    if crate::dlss::enabled_build_requested() {
-        plugins.set(bevy::render::RenderPlugin {
-            render_creation: bevy::render::settings::WgpuSettings {
-                backends: Some(bevy::render::settings::Backends::VULKAN),
-                ..default()
-            }
-            .into(),
-            ..default()
-        })
-    } else {
-        plugins
-    }
+    plugins
 }

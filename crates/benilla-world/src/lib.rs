@@ -112,7 +112,6 @@ pub mod clutter;
 pub mod collision;
 pub mod decal;
 pub mod dev_state;
-pub mod dlss;
 pub mod doodad_anim;
 pub mod entity_shade;
 pub mod exterior_cull;

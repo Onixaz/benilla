@@ -312,10 +312,6 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
     // No `game://` source: the five UI shaders are compiled in by `crate::shaders`
     // (`embedded://benilla_app/shaders/…`), so no build-machine path reaches the binary.
 
-    // `DlssInitPlugin` must configure raw Vulkan before `RenderPlugin` builds. The helper is a
-    // no-op unless this executable was built with `--features dlss` and `WOW_DLSS=1` is set.
-    benilla_world::dlss::install_before_default_plugins(&mut app);
-
     app.add_plugins(benilla_world::boot::tuned_default_plugins(Window {
         title: "benilla".into(),
         // Born in the player's display mode (`gxWindow` read straight off `config.toml`) rather
@@ -407,10 +403,6 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
         connect: !capturing,
         start: run_mode::start_state(),
     });
-
-    // This comes after the world plugins so its `finish` hook can place the built-in DLSS node
-    // before the existing FFXGlow node. It is a no-op for normal builds and normal launches.
-    benilla_world::dlss::install_after_default_plugins(&mut app);
 
     // benilla-assets' loaders go into the live `AssetServer`, so they register after `AssetPlugin`.
     benilla_assets::register_asset_loaders(&mut app);

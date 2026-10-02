@@ -100,10 +100,8 @@ impl Plugin for LiquidPlugin {
                         .in_set(SubmersionVerdict),
                 ),
             )
-            // `WOW_NO_LIQUID`, or an active DLSS prototype: after both per-frame `Visibility`
-            // owners of a surface (the exterior cull, the model-visibility authority) and before
-            // Bevy reads it. DLSS keeps the established liquid data/logic but hides the renderer
-            // until it understands the lower main-pass resolution.
+            // `WOW_NO_LIQUID`: after both per-frame `Visibility` owners of a surface (the
+            // exterior cull, the model-visibility authority) and before Bevy reads it.
             .add_systems(
                 PostUpdate,
                 surface::hide_liquid_surfaces

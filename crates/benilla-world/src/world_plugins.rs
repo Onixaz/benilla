@@ -173,16 +173,8 @@ impl Plugin for WorldFoundation {
         // Static transform tracking always on: movers are 1–3% of the world, so the adaptive
         // check's two full scans a frame could only ever conclude "track".
         app.insert_resource(bevy::transform::systems::StaticTransformOptimizations::enabled());
-        // DLSS needs depth and motion for every world pixel. The retained lane has neither yet,
-        // so the prototype leaves it out and the ordinary entity renderer owns those placements.
-        if crate::dlss::enabled_build_requested() {
-            info!(
-                "DLSS prototype: static_gx disabled because prepass support is not implemented yet"
-            );
-        } else {
-            // The retained static-world pass; `WOW_STATIC_GX=0` opts out, registering nothing.
-            app.add_plugins(crate::static_gx::StaticGxPlugin);
-        }
+        // The retained static-world pass; `WOW_STATIC_GX=0` opts out, registering nothing.
+        app.add_plugins(crate::static_gx::StaticGxPlugin);
         // `WOW_MERGE_CENSUS=1`: the merge census printer.
         if crate::static_merge::census_enabled() {
             app.add_systems(bevy::app::Update, crate::static_merge::log_merge_census);
