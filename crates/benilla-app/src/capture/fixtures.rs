@@ -1675,19 +1675,6 @@ fn seed_equipped_bags(
     }
 }
 
-/// Turn enemy plates on or off as the V binding does, the verb and FrameXML's global together,
-/// so FrameXML's own replay agrees.
-fn set_enemy_plates(script: Option<&benilla_ui::script::UiScript>, on: bool) {
-    let lua = if on {
-        "NAMEPLATES_ON = 1; ShowNameplates()"
-    } else {
-        "NAMEPLATES_ON = nil; HideNameplates()"
-    };
-    if let Some(Err(e)) = script.map(|s| s.run(lua)) {
-        warn!("nameplates: {e}");
-    }
-}
-
 /// MONKEY (perf): `WOW_PERF_CROWD=<n>` stands `n` naked human players (display 49) in a grid
 /// around the scenario's look point, on the ground — a start zone's crowd for the FPS probe, so the
 /// per-unit costs (animation, the shadow lanes' CPU skinning) are in the measurement. Off unset.
@@ -1761,5 +1748,18 @@ pub(super) fn seed_perf_crowd(
             },
             Visibility::default(),
         ));
+    }
+}
+
+/// Turn enemy plates on or off as the V binding does, the verb and FrameXML's global together,
+/// so FrameXML's own replay agrees.
+fn set_enemy_plates(script: Option<&benilla_ui::script::UiScript>, on: bool) {
+    let lua = if on {
+        "NAMEPLATES_ON = 1; ShowNameplates()"
+    } else {
+        "NAMEPLATES_ON = nil; HideNameplates()"
+    };
+    if let Some(Err(e)) = script.map(|s| s.run(lua)) {
+        warn!("nameplates: {e}");
     }
 }

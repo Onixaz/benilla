@@ -488,11 +488,12 @@ pub(crate) const ENV_MAP_MARKER: u16 = 1 << 12;
 /// vertex with no raster bias; a `WowModelKey` axis, so every other draw keeps its real depth.
 pub(crate) const SKY_DEPTH_MARKER: u16 = 1 << 13;
 
-/// MONKEY (fix-wind): `clutter_fade.z` marker bit 14: a classified tree/bush leaf batch's exile
+/// MONKEY (wind): `clutter_fade.z` marker bit 15: a classified tree/bush leaf batch's exile
 /// copy, the only entity draw `wow_model.wgsl` applies `tree_offset` to. Vertex-only uniform data,
 /// not a `WowModelKey` axis. (It replaced MeshTag bit 18, which aliases the lane weight and the
-/// interior probe slot, so doorway units and interior props swayed.)
-pub(crate) const FOLIAGE_WIND_MARKER: u16 = 1 << 14;
+/// interior probe slot, so doorway units and interior props swayed.) Bit 14 is reserved for
+/// downstream material extensions; sharing it makes faded foliage take their fragment paths.
+pub(crate) const FOLIAGE_WIND_MARKER: u16 = 1 << 15;
 
 /// [`BATCH_ORDER_SORT_EPS`] for the WMO skybox lane: at the −6e4 rung the f32 ulp is 0.0039, so
 /// 1e-3 would round away; this step is 4 ulps. Every skybox batch pair ties, being eye-anchored.

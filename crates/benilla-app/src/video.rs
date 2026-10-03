@@ -484,19 +484,6 @@ pub(crate) fn on_cvar(
         "gxvsync" => cfg.vsync = ev.flag(),
         // The reference's polarity: `1` is windowed (the row is "Windowed Mode").
         "gxwindow" => cfg.display = display_from_flag(v),
-        // Latched like `gxWindow`: the commit is `RestartGx`, which rebuilds the window
-        // (`0x58cf10` reads `+0x09`); `apply_window_mode` is that rebuild.
-        "gxmaximize" => cfg.maximize = ev.flag(),
-        // The FFX pass's three switches, read every frame by the reference (`0x6cd8a6`, `0x6cc5a8`,
-        // `0x6cdf10`), so a write shows on the next frame.
-        "ffx" | "ffxglow" | "ffxdeath" => {
-            match ev.key().as_str() {
-                "ffx" => ffx.master = ev.flag(),
-                "ffxglow" => ffx.glow = ev.flag(),
-                _ => ffx.death = ev.flag(),
-            }
-            info!("video: full-screen effects {:?}", *ffx);
-        }
         // ── MONKEY (lighting): the dynamic light + shadow system's 34 rows ────────────────────
         // MONKEY (lampfog): lampFog is one of these live VideoConfig rows too.
         // They live in THIS observer, and not in one of their own beside `shadow_core` /
@@ -634,6 +621,19 @@ pub(crate) fn on_cvar(
         // over-drive for judging the shape. Clamped at the edge like every knob here.
         "fireflicker" => cfg.fire_flicker = v.clamp(0.0, 2.0),
         // ── end MONKEY (lighting) ─────────────────────────────────────────────────────────────
+        // Latched like `gxWindow`: the commit is `RestartGx`, which rebuilds the window
+        // (`0x58cf10` reads `+0x09`); `apply_window_mode` is that rebuild.
+        "gxmaximize" => cfg.maximize = ev.flag(),
+        // The FFX pass's three switches, read every frame by the reference (`0x6cd8a6`, `0x6cc5a8`,
+        // `0x6cdf10`), so a write shows on the next frame.
+        "ffx" | "ffxglow" | "ffxdeath" => {
+            match ev.key().as_str() {
+                "ffx" => ffx.master = ev.flag(),
+                "ffxglow" => ffx.glow = ev.flag(),
+                _ => ffx.death = ev.flag(),
+            }
+            info!("video: full-screen effects {:?}", *ffx);
+        }
         "farclip" => view.farclip = v.clamp(*FARCLIP_RANGE.start(), *FARCLIP_RANGE.end()),
         // Clamped, where the reference refuses an out-of-range write and keeps the value
         // (`0x688d90` echoes "NearClip must be in range 0.01 - 0.33" and returns 0).
@@ -1212,7 +1212,8 @@ mod tests {
             display: DisplayMode::Windowed,
             maximize: false,
             windowed: UVec2::new(1024, 768),
-            ..default()
+            // MONKEY (merge): this window test inherits unrelated lighting defaults.
+            ..Default::default()
         })
         .init_resource::<GxRestarts>()
         .add_systems(Update, apply_window_mode);

@@ -698,11 +698,11 @@ impl StaticGx {
     }
 }
 
-/// MONKEY (wind): conservative leaf classification. Alpha test excludes trunks/rocks even when a
-/// whole model path says tree; the name terms cover vanilla's tree/bush/plant families. Animated
+/// MONKEY (wind): conservative leaf classification. Alpha test alone does not exclude rock cards;
+/// rigid model names veto plant-family directories. Animated
 /// doodads never reach this function because `assemble.rs` excludes them before `StaticGx::divert`.
 pub(crate) fn foliage_wind_batch(path: &str, blend: ModelBlend, wmo_geometry: bool) -> bool {
-    if wmo_geometry || blend != ModelBlend::AlphaTest {
+    if wmo_geometry || blend != ModelBlend::AlphaTest || crate::wind::rigid_model(path) {
         return false;
     }
     let p = path.to_ascii_lowercase();
@@ -916,6 +916,23 @@ mod tests {
             ModelBlend::AlphaTest,
             true,
         ));
+    }
+
+    #[test]
+    fn foliage_classifier_vetoes_rigid_cards_in_plant_families() {
+        for path in [
+            "World\\Generic\\PassiveDoodads\\Bush\\BushRock01.m2",
+            "World\\Azeroth\\Elwynn\\PassiveDoodads\\Trees\\Stone01.m2",
+            "World/Generic/Foliage/Boulder01.m2",
+            "World/Generic/Plants/Pebble01.m2",
+            "World/Generic/Foliage/Gravel01.m2",
+            "World/Generic/Foliage/Rubble01.m2",
+        ] {
+            assert!(
+                !foliage_wind_batch(path, ModelBlend::AlphaTest, false),
+                "{path}"
+            );
+        }
     }
 
     #[test]

@@ -91,7 +91,6 @@
         end
 
         -- The category tree in list order; keys are the row name suffixes.
-        -- MONKEY (advanced graphics): "AdvancedGraphics" joins the System group under Graphics.
         -- MONKEY (advanced graphics): "AdvancedGraphics" joins the System group under Graphics —
         -- the seat the era's own tree gives a page that refines the one above it, and the seat
         -- that keeps the three shadow rows it inherits one row away from where they used to be.

@@ -28,9 +28,9 @@ use crate::ui_script::VmMemo;
 use benilla_ui::script::{SeededCvar, UiScript};
 
 mod table;
-pub(crate) use table::{registered_pairs, REGISTERED};
 #[cfg(test)]
-use table::{Reference, Registered};
+use table::Reference;
+pub(crate) use table::{registered_pairs, REGISTERED};
 
 /// `config.toml`: a `[cvars]` table of `Name = "value"` strings, sorted so every save is stable.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -1704,53 +1704,6 @@ mod tests {
         assert_eq!(d["renderScale"], 1.0);
     }
 
-    /// The FFX pass's three switches reach it one by one (`ffx`, `ffxGlow`, `ffxDeath`).
-    #[test]
-    fn the_ffx_switches_reach_the_pass() {
-        use benilla_world::ffx_glow::FfxSwitches;
-        let mut app = cvar_app();
-        let on = FfxSwitches::default();
-        assert_eq!(*res::<FfxSwitches>(&app), on);
-        apply(&mut app, "ffxGlow", "0");
-        assert_eq!(*res::<FfxSwitches>(&app), FfxSwitches { glow: false, ..on });
-        apply(&mut app, "ffxglow", "1");
-        apply(&mut app, "ffxDeath", "0");
-        assert_eq!(
-            *res::<FfxSwitches>(&app),
-            FfxSwitches { death: false, ..on }
-        );
-        apply(&mut app, "ffxDeath", "1");
-        apply(&mut app, "ffx", "0");
-        assert_eq!(
-            *res::<FfxSwitches>(&app),
-            FfxSwitches {
-                master: false,
-                ..on
-            }
-        );
-    }
-
-    /// `gxMaximize` registers latched (flags 3): a write is staged and moves nothing until the
-    /// `RestartGx` commit, where the window knob takes it.
-    #[test]
-    fn gx_maximize_waits_for_the_restart_commit() {
-        let mut app = cvar_app();
-        let outcome = app
-            .world_mut()
-            .resource_mut::<Cvars>()
-            .set("gxMaximize", "1");
-        assert_eq!(outcome, SetOutcome::Staged);
-        let events = app.world_mut().resource_mut::<Cvars>().take_events();
-        assert!(events.is_empty(), "a staged write fires no callback");
-        assert!(!res::<VideoConfig>(&app).maximize);
-        assert_eq!(app.world_mut().resource_mut::<Cvars>().commit_latched(), 1);
-        let events = app.world_mut().resource_mut::<Cvars>().take_events();
-        for event in events {
-            app.world_mut().trigger(event);
-        }
-        assert!(res::<VideoConfig>(&app).maximize, "the commit applies it");
-    }
-
     // ── MONKEY (advanced graphics): the preset ladder ─────────────────────────────────────────
 
     /// A registry holding nothing but the registered defaults — the state a fresh
@@ -2337,6 +2290,53 @@ mod tests {
         assert_eq!(derive_lighting_quality(&cvars), LIGHTING_CUSTOM);
         apply_lighting_preset(&mut cvars, "High");
         assert_eq!(cvars.get("waterQuality"), Some("1"));
+    }
+
+    /// The FFX pass's three switches reach it one by one (`ffx`, `ffxGlow`, `ffxDeath`).
+    #[test]
+    fn the_ffx_switches_reach_the_pass() {
+        use benilla_world::ffx_glow::FfxSwitches;
+        let mut app = cvar_app();
+        let on = FfxSwitches::default();
+        assert_eq!(*res::<FfxSwitches>(&app), on);
+        apply(&mut app, "ffxGlow", "0");
+        assert_eq!(*res::<FfxSwitches>(&app), FfxSwitches { glow: false, ..on });
+        apply(&mut app, "ffxglow", "1");
+        apply(&mut app, "ffxDeath", "0");
+        assert_eq!(
+            *res::<FfxSwitches>(&app),
+            FfxSwitches { death: false, ..on }
+        );
+        apply(&mut app, "ffxDeath", "1");
+        apply(&mut app, "ffx", "0");
+        assert_eq!(
+            *res::<FfxSwitches>(&app),
+            FfxSwitches {
+                master: false,
+                ..on
+            }
+        );
+    }
+
+    /// `gxMaximize` registers latched (flags 3): a write is staged and moves nothing until the
+    /// `RestartGx` commit, where the window knob takes it.
+    #[test]
+    fn gx_maximize_waits_for_the_restart_commit() {
+        let mut app = cvar_app();
+        let outcome = app
+            .world_mut()
+            .resource_mut::<Cvars>()
+            .set("gxMaximize", "1");
+        assert_eq!(outcome, SetOutcome::Staged);
+        let events = app.world_mut().resource_mut::<Cvars>().take_events();
+        assert!(events.is_empty(), "a staged write fires no callback");
+        assert!(!res::<VideoConfig>(&app).maximize);
+        assert_eq!(app.world_mut().resource_mut::<Cvars>().commit_latched(), 1);
+        let events = app.world_mut().resource_mut::<Cvars>().take_events();
+        for event in events {
+            app.world_mut().trigger(event);
+        }
+        assert!(res::<VideoConfig>(&app).maximize, "the commit applies it");
     }
 
     #[test]
@@ -3572,7 +3572,7 @@ mod tests {
 
     /// The value the reference boots a row at, as its [`Reference`] column records it; `None`
     /// for benilla's own rows (nothing to match).
-    fn reference_boot_value(row: &Registered) -> Option<&'static str> {
+    fn reference_boot_value(row: &super::table::Registered) -> Option<&'static str> {
         match &row.reference {
             Reference::Same(v) => Some(v),
             // The reference's own boot code lands where our default does.

@@ -15,6 +15,19 @@ const TAU: f64 = std::f64::consts::TAU;
 const RATIOS: [f64; 3] = [1.0, 0.437, 0.1913];
 const WEIGHTS: [f64; 3] = [0.60, 0.28, 0.12];
 
+/// MONKEY (wind): rigid detail models can have alpha-tested cards and live in plant directories.
+/// Inspect the filename so a zone such as Stonetalon does not disable all its vegetation.
+pub(crate) fn rigid_model(path: &str) -> bool {
+    let name = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    ["rock", "stone", "boulder", "pebble", "gravel", "rubble"]
+        .iter()
+        .any(|term| name.contains(term))
+}
+
 /// The WarcraftXL wind profile. Units are yards, seconds and degrees.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WindProfile {
@@ -351,6 +364,22 @@ impl Plugin for WindPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rigid_details_ignore_case_and_plant_directory_names() {
+        for path in [
+            "World/Plants/BushRock01.m2",
+            "World\\Trees\\STONE01.mdx",
+            "Boulder02.m2",
+            "Pebble01.m2",
+            "Gravel01.m2",
+            "Rubble01.m2",
+        ] {
+            assert!(rigid_model(path), "{path}");
+        }
+        assert!(!rigid_model("World/Stonetalon/Trees/Pine01.m2"));
+        assert!(!rigid_model("World/RockyZone/Grass01.m2"));
+    }
 
     #[test]
     fn defaults_are_the_warcraft_xl_profile() {

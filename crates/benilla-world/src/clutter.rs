@@ -334,6 +334,9 @@ fn build_chunk_clutter(
                 (lo.min(p[2]), hi.max(p[2]))
             });
         let height_span = (max_z - min_z).max(1.0e-4);
+        // MONKEY (wind): the detail table includes stones as well as grass. Zero bend weight
+        // keeps their geometry fixed under both wind and the player-parting field.
+        let bends = !crate::wind::rigid_model(model_path);
         for sub in subs.iter() {
             let vcount = sub.positions.len() * placements.len();
             let mut positions = Vec::with_capacity(vcount);
@@ -359,7 +362,12 @@ fn build_chunk_clutter(
                 for (i, p) in sub.positions.iter().enumerate() {
                     positions.push((rot * (wow_to_bevy(*p) * inst_scale) + origin).to_array());
                     uvs.push(sub.uvs[i]);
-                    wind.push([((p[2] - min_z) / height_span).clamp(0.0, 1.0), phase]);
+                    let bend_height = if bends {
+                        ((p[2] - min_z) / height_span).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    wind.push([bend_height, phase]);
                     normals.push(sp.ground_normal);
                     colors.push(tint);
                 }

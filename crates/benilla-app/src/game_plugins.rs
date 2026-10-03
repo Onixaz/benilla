@@ -734,7 +734,14 @@ pub(crate) mod schedule_tests {
     /// rows) and one pair each of the new systems against the two exclusive systems. Upstream
     /// 5,481 + ours = 5,509, read off the merged tree (upstream v0.2.0 ba7fe6e2; three more of ours
     /// pair with upstream's new v0.2.0 systems).
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_509;
+    ///
+    /// MONKEY (merge upstream b396bbf6, 2026-10-02): upstream's own declarations dropped its
+    /// ceiling to 4,980; the merged tree reads 4,999 = upstream 4,980 + 19 of ours (the lanes'
+    /// residual pairs above, unchanged in kind). Read off the merged tree's test run.
+    ///
+    /// twow merge of everwood f5547a63: 5,016 = 4,999 + 17 from the twow systems. Read off the
+    /// merged tree's test run.
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_016;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

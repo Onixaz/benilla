@@ -1172,9 +1172,9 @@ impl Plugin for FfxGlowPlugin {
             .init_resource::<GlueFfx>()
             .init_resource::<FfxHazeMix>()
             .init_resource::<FfxWave>()
-            .init_resource::<FfxSwitches>()
             // MONKEY (p0 skyDither)
             .init_resource::<SkyDither>()
+            .init_resource::<FfxSwitches>()
             .add_plugins((
                 ExtractComponentPlugin::<FfxGlow>::default(),
                 ExtractComponentPlugin::<FfxBackdrop>::default(),
@@ -1183,8 +1183,8 @@ impl Plugin for FfxGlowPlugin {
                 ExtractResourcePlugin::<GlueFfx>::default(),
                 ExtractResourcePlugin::<FfxHazeMix>::default(),
                 ExtractResourcePlugin::<FfxWave>::default(),
-                ExtractResourcePlugin::<FfxSwitches>::default(),
                 ExtractResourcePlugin::<SkyDither>::default(),
+                ExtractResourcePlugin::<FfxSwitches>::default(),
             ))
             .add_systems(
                 Update,
