@@ -172,9 +172,16 @@ impl Plugin for DressUpUiPlugin {
 
 /// The rooms of the `<DressUpModel>` panes no stock window claims, one per widget, as each clones
 /// its own model (`0x5059a0`): Turtle's transmog doll and item tiles. A room outlives its pane's
-/// hiding, as the widget keeps its model, and dies with the widget.
+/// hiding, as the widget keeps its model, and dies with the widget or its VM. `full` latches the
+/// one warning a pane past the pool earns.
+#[derive(Default)]
+struct Rooms {
+    panes: HashMap<FrameHandle, DressUpRoom>,
+    full: bool,
+}
+
 #[derive(Resource, Default)]
-struct PaneRooms(HashMap<FrameHandle, DressUpRoom>);
+struct PaneRooms(crate::ui_script::VmMemo<Rooms>);
 
 fn feed_dressup(
     script: Option<NonSendMut<UiScript>>,
@@ -188,11 +195,19 @@ fn feed_dressup(
     // `ResMut` because the guild cache is lazy: a miss sends the `CMSG_GUILD_QUERY` whose answer
     // paints the tabard.
     mut guilds: ResMut<crate::ui_guild::GuildState>,
-    mut pool_full: Local<bool>,
 ) {
     let Some(mut script) = script else {
         return;
     };
+    // A new VM's handles name new frames: its rooms start empty and the pool lets go.
+    let (rooms, fresh) = pane_rooms.0.get_reset(&script);
+    if fresh {
+        for d in &mut pool.0 {
+            d.pane = None;
+            d.preview.look = None;
+            d.view = None;
+        }
+    }
     for (pane, intent) in script.take_dressup_intents() {
         // The stock panes share the one stock booth; any other pane is a room of its own.
         let stock = script
@@ -201,7 +216,7 @@ fn feed_dressup(
         if stock {
             room.apply(intent);
         } else {
-            pane_rooms.0.entry(pane).or_default().apply(intent);
+            rooms.panes.entry(pane).or_default().apply(intent);
         }
     }
     // The room empties when neither the dressing room nor the auction house's
@@ -222,7 +237,7 @@ fn feed_dressup(
     let me = self_q.single().ok();
     // The crest comes off the guild cache this system holds, not the outfit `player_look` builds.
     // Asked only while a room is open, since a cache miss sends a query.
-    let any_open = room.open || pane_rooms.0.values().any(|r| r.open);
+    let any_open = room.open || rooms.panes.values().any(|r| r.open);
     let emblem = me.filter(|_| any_open).and_then(|(store, _)| {
         crate::ui_guild::unit_guild_emblem(&store.0, &mut guilds, &commands)
     });
@@ -238,17 +253,17 @@ fn feed_dressup(
     }
 
     // A pane room draws through a pool booth only while its widget is shown.
-    pane_rooms
-        .0
+    rooms
+        .panes
         .retain(|pane, _| script.model_pane_at(*pane).is_some());
     for d in &mut pool.0 {
-        if d.pane.is_some_and(|p| !pane_rooms.0.contains_key(&p)) {
+        if d.pane.is_some_and(|p| !rooms.panes.contains_key(&p)) {
             d.pane = None;
             d.preview.look = None;
             d.view = None;
         }
     }
-    for (pane, room) in &mut pane_rooms.0 {
+    for (pane, room) in &mut rooms.panes {
         room.resolve_pending(&items, &commands);
         let Some(m) = script.model_pane_at(*pane) else {
             continue;
@@ -258,8 +273,8 @@ fn feed_dressup(
             continue;
         }
         let Some(i) = pool.claim(*pane) else {
-            if !*pool_full {
-                *pool_full = true;
+            if !rooms.full {
+                rooms.full = true;
                 warn!(
                     "dressup: more than {} DressUpModel panes shown; the rest draw nothing",
                     pool.0.len()

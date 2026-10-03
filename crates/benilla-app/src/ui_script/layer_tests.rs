@@ -50,6 +50,25 @@ pub(super) fn production_load_with(
     before: &str,
     addons: impl FnOnce(&std::path::Path),
 ) -> (UiScript, Vec<String>) {
+    production_load_full(tag, stock_ui, before, None, addons)
+}
+
+/// The production in-game load with the layer, under the char-enum record the live load seats
+/// before it ([`super::lifecycle::record_from_roster`]). The caller holds [`ENV_LOCK`].
+pub(super) fn production_load_with_record(
+    tag: &str,
+    record: benilla_ui::script::PlayerRecord,
+) -> (UiScript, Vec<String>) {
+    production_load_full(tag, false, "", Some(record), |_| {})
+}
+
+fn production_load_full(
+    tag: &str,
+    stock_ui: bool,
+    before: &str,
+    record: Option<benilla_ui::script::PlayerRecord>,
+    addons: impl FnOnce(&std::path::Path),
+) -> (UiScript, Vec<String>) {
     let tmp = std::env::temp_dir().join(format!("benilla-layer-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let home = tmp.join("benilla-config");
@@ -61,6 +80,9 @@ pub(super) fn production_load_with(
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
+    if let Some(record) = record {
+        s.set_player_record(record);
+    }
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {

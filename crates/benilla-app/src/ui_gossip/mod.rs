@@ -142,7 +142,10 @@ impl Plugin for UiGossipPlugin {
             (
                 // Range-close first so the clear fires `GOSSIP_CLOSED` the same frame.
                 close_npc_session_out_of_range::<GossipState>.before(feed_gossip),
-                feed_gossip.in_set(UiFeed),
+                // After the unit feed, so `"npc"` exists when `GOSSIP_SHOW` fires, as the reference
+                // sets the interact NPC (`0x4930d0`) before the event: Turtle's transmog opens only
+                // when `UnitExists("npc")` answers, and a cached greeting fires the open frame.
+                feed_gossip.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                 drain_gossip.after(UiInput),
             ),
         );
