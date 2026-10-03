@@ -87,7 +87,7 @@ enum Command {
         /// `SMSG_GUILD_QUERY_RESPONSE` carries them; only a guild-emblem tabard (20621) shows it.
         #[arg(long, value_delimiter = ',')]
         emblem: Option<Vec<i32>>,
-        /// Write the composited atlas here as a PNG (256²).
+        /// Write the composited atlas here as a PNG (256², or an HD pack's larger skin).
         #[arg(long)]
         out: Option<PathBuf>,
     },

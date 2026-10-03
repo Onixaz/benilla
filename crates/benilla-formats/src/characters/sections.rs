@@ -103,7 +103,7 @@ pub struct CharSections {
 }
 
 impl CharSections {
-    /// The 256² base body skin for a skin colour (`sectionType 0`).
+    /// The base body skin, 256² (larger in an HD pack), for a skin colour (`sectionType 0`).
     pub fn skin_texture(&self, race: u8, sex: u8, skin_color: u8) -> Option<&str> {
         self.tex(race, sex, SECTION_SKIN, 0, skin_color, 0)
     }
@@ -529,8 +529,16 @@ pub fn equip_region_candidates(layer: usize, name: &str, sex: u8) -> [String; 2]
     ['U', letter].map(|c| format!("Item\\TextureComponents\\{dir}\\{name}_{c}.blp"))
 }
 
+/// The reference's body atlas edge in pixels (`0x475c50`); the tiles are laid out on it.
+const ATLAS_EDGE: u32 = 256;
+
 /// Source-over blit of an overlay's mip pyramid at `tile`, level by level, from the overlay's own
 /// origin (`0x4770f0`: src `(0,0)`, extent the tile); an opaque texel copies, the client's REPLACE.
+///
+/// Deviation: the reference's atlas is 256² and each overlay its tile's size. An HD asset pack
+/// (VanillaHelpers' larger compositor) ships a bigger base skin and bigger overlays, so the tile
+/// scales by the atlas over 256 and an overlay at another scale is resampled nearest onto it from
+/// its closest mip; stock data maps one to one.
 fn blit_over(dst: &mut BlpMipChain, src: &BlpMipChain, tile: Tile) {
     // Both chains must be decoded RGBA: DXT blocks would blend into garbage without failing.
     debug_assert!(
@@ -538,23 +546,46 @@ fn blit_over(dst: &mut BlpMipChain, src: &BlpMipChain, tile: Tile) {
         "character-skin compositing needs decoded chains on both sides"
     );
     let (tx, ty, tw, th) = tile;
-    let levels = dst.mips.len().min(src.mips.len());
-    for i in 0..levels {
+    // The atlas's and the overlay's scale over the reference's, as powers of two.
+    let dst_scale = (dst.width / ATLAS_EDGE).max(1).ilog2() as usize;
+    let src_scale = (src.width / tw.max(1)).max(1).ilog2() as usize;
+    for i in 0..dst.mips.len() {
+        // The overlay level at the atlas level's scale; level 0 upsampled when the atlas is finer.
+        let j = (i + src_scale).saturating_sub(dst_scale);
+        if j >= src.mips.len() {
+            break;
+        }
         let dw = (dst.width >> i).max(1) as usize;
         let dh = (dst.height >> i).max(1) as usize;
-        let sw = (src.width >> i).max(1) as usize;
-        let sh = (src.height >> i).max(1) as usize;
-        let (ox, oy) = ((tx >> i) as usize, (ty >> i) as usize);
-        let cw = ((tw >> i).max(1) as usize)
-            .min(sw)
-            .min(dw.saturating_sub(ox));
-        let ch = ((th >> i).max(1) as usize)
-            .min(sh)
-            .min(dh.saturating_sub(oy));
-        let (d, s) = (&mut dst.mips[i], &src.mips[i]);
+        let sw = (src.width >> j).max(1) as usize;
+        let sh = (src.height >> j).max(1) as usize;
+        let (ox, oy) = (
+            ((tx << dst_scale) >> i) as usize,
+            ((ty << dst_scale) >> i) as usize,
+        );
+        // The tile's extent in the atlas level and in the overlay level.
+        let (aw, ah) = (
+            ((tw << dst_scale) >> i).max(1) as usize,
+            ((th << dst_scale) >> i).max(1) as usize,
+        );
+        let (ew, eh) = (
+            ((tw << src_scale) >> j).max(1) as usize,
+            ((th << src_scale) >> j).max(1) as usize,
+        );
+        let cw = aw.min(dw.saturating_sub(ox));
+        let ch = ah.min(dh.saturating_sub(oy));
+        let (d, s) = (&mut dst.mips[i], &src.mips[j]);
         for row in 0..ch {
+            let sy = row * eh / ah;
+            if sy >= sh {
+                break;
+            }
             for col in 0..cw {
-                let si = (row * sw + col) * 4;
+                let sx = col * ew / aw;
+                if sx >= sw {
+                    break;
+                }
+                let si = (sy * sw + sx) * 4;
                 let di = ((oy + row) * dw + (ox + col)) * 4;
                 if si + 4 > s.len() || di + 4 > d.len() {
                     continue;
@@ -1229,6 +1260,37 @@ mod tests {
         let before = dst.mips[0].clone();
         blit_over(&mut dst, &chain(1, 1, vec![1, 2, 3, 0]), (0, 0, 1, 1));
         assert_eq!(dst.mips[0], before, "transparent texel is a no-op");
+    }
+
+    /// An HD pack's 512² atlas doubles every tile; a 2× overlay lands texel for texel and a stock
+    /// 1× overlay is upsampled onto the same doubled rect.
+    #[test]
+    fn blit_over_scales_tiles_to_an_hd_atlas() {
+        let grey = [128, 128, 128, 255];
+        let red = [255, 0, 0, 255];
+        // Tile g7 (128, 224, 128, 32) at 2×: x 256..512, y 448..512.
+        let (tile, edge) = (EQUIP_TILES[7], 512usize);
+        let painted = |d: &BlpMipChain| {
+            let mut n = 0;
+            for y in 0..edge {
+                for x in 0..edge {
+                    let i = (y * edge + x) * 4;
+                    if d.mips[0][i..i + 4] == red {
+                        assert!(
+                            (256..512).contains(&x) && (448..512).contains(&y),
+                            "({x}, {y}) is outside the doubled tile"
+                        );
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        for (w, h) in [(256, 64), (128, 32)] {
+            let mut dst = chain(512, 512, grey.repeat(edge * edge));
+            blit_over(&mut dst, &chain(w, h, red.repeat((w * h) as usize)), tile);
+            assert_eq!(painted(&dst), 256 * 64, "a {w}×{h} overlay fills the tile");
+        }
     }
 
     /// On the shipped files a Human male's head and pelvis tiles change, and the torso does not.

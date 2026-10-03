@@ -10,7 +10,8 @@ use benilla_formats::{
     CharSections, CharacterGeosets, EmblemLayer, EquipGeosets, GuildEmblem, ItemDisplay,
 };
 
-/// The body's ten fixed tiles in its 256² atlas (the reference's bbox table `0xb42450`).
+/// The body's ten fixed tiles in its 256² atlas (the reference's bbox table `0xb42450`), scaled
+/// to a larger HD atlas when reading it.
 const TILES: [(&str, u32, u32, u32, u32); 10] = [
     ("g0 ArmUpper", 0, 0, 128, 64),
     ("g1 ArmLower", 0, 64, 128, 64),
@@ -178,6 +179,8 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
         .context("no base skin row for this appearance")?;
 
     let stride = dressed.width as usize;
+    // An HD pack's atlas is a multiple of 256²; each 256-scale row covers `k` atlas rows.
+    let k = (dressed.width / 256).max(1);
     println!(
         "\natlas {}x{} ({} mips) — rows repainted vs naked, per tile:",
         dressed.width,
@@ -189,8 +192,13 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
             .map(|r| {
                 (0..tw)
                     .filter(|c| {
-                        let i = (((y + r) as usize) * stride + (x + c) as usize) * 4;
-                        dressed.mips[0][i..i + 4] != naked.mips[0][i..i + 4]
+                        let (ay, ax) = ((y + r) * k, (x + c) * k);
+                        (ay..ay + k).any(|py| {
+                            (ax..ax + k).any(|px| {
+                                let i = (py as usize * stride + px as usize) * 4;
+                                dressed.mips[0][i..i + 4] != naked.mips[0][i..i + 4]
+                            })
+                        })
                     })
                     .count() as u32
             })
