@@ -85,6 +85,9 @@ const VERDICTS: &[(&str, Verdict)] = &[
     ("CustomCursorImage", Plumbing),
     ("InputPlugin", Plumbing),
     ("WinitPlugin", Plumbing),
+    // The event loop's pacing (a capture probe runs it continuous); no input arrives through it.
+    ("WinitSettings", Plumbing),
+    ("UpdateMode", Plumbing),
     ("InputSystems", Plumbing),
     ("Key", Plumbing),
     ("KeyCode", Plumbing),
