@@ -17,6 +17,7 @@ pub(crate) fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "shaders/cloud.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/celestial.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/ffx_glow.wgsl");
+    bevy::asset::embedded_asset!(app, "shaders/motion_vector_debug.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/wow_effect.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/static_gx.wgsl");
     // MONKEY (torch shadows Phase 1): the vertex-only depth-map shader for the interior-fixture pass.
@@ -62,6 +63,7 @@ mod tests {
         // 8 since 2016 added `sky_vertex.wgsl` (the sky's shared far-depth vertex stage);
         // 9 since the torch-shadow Phase 1 added `torch_depth.wgsl` (the interior depth map).
         // MONKEY (sky): 10 with `sky_fx.wgsl`, the sky's Enhanced/High library.
-        assert_eq!(found, 10, "the engine's shader set changed size");
+        // 11 with `motion_vector_debug.wgsl`, the DLSS motion-vector view.
+        assert_eq!(found, 11, "the engine's shader set changed size");
     }
 }

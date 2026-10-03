@@ -12,9 +12,9 @@ use bevy::math::Affine3A;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
-use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
+use bevy::render::extract_resource::{extract_resource, ExtractResource, ExtractResourcePlugin};
 use bevy::render::renderer::RenderQueue;
-use bevy::render::{Render, RenderApp, RenderSystems};
+use bevy::render::{ExtractSchedule, Render, RenderApp, RenderSystems};
 
 use crate::mesh_tag::MAX_RIG_SLOTS;
 use crate::vis_chain::VisChainOnly;
@@ -25,6 +25,9 @@ pub(crate) const MAX_PALETTE_BONES: usize = 131_072;
 
 /// Bytes a bone: 3 `vec4` rows of the affine.
 const BONE_BYTES: u64 = 48;
+
+/// Palette-row count in one current or previous bank.
+const PALETTE_ROWS: u64 = 3 * MAX_PALETTE_BONES as u64;
 
 /// Byte offset of the rig slot table (a base bone index a slot), after the prop-probe region.
 pub(crate) fn rig_table_region_offset() -> u64 {
@@ -41,10 +44,26 @@ pub(crate) fn rig_origin_region_bytes() -> u64 {
     MAX_RIG_SLOTS as u64 * 16
 }
 
+/// Byte offset of the previous rig-origin table, after every other fixed-size palette region.
+/// The following palette array is the shader struct's only runtime-sized member.
+pub(crate) fn previous_rig_origin_region_offset() -> u64 {
+    crate::straddle::region_offset() + crate::straddle::region_bytes()
+}
+
+/// Bytes the previous-origin table adds (32 KB at 2048 slots).
+pub(crate) fn previous_rig_origin_region_bytes() -> u64 {
+    rig_origin_region_bytes()
+}
+
 /// Byte offset of the palette rows, after the slot, tint, origin, mat-anim and straddle-clip
 /// tables: last, because `wow_model.wgsl` declares them as the struct's one runtime-sized array.
 pub(crate) fn palette_region_offset() -> u64 {
-    crate::straddle::region_offset() + crate::straddle::region_bytes()
+    previous_rig_origin_region_offset() + previous_rig_origin_region_bytes()
+}
+
+/// Byte offset of the previous palette bank in the runtime-sized palette array.
+pub(crate) fn previous_palette_region_offset() -> u64 {
+    palette_region_offset() + PALETTE_ROWS * 16
 }
 
 /// Total bytes the slot-indexed regions add to every `wow_light`-layout buffer.
@@ -54,7 +73,16 @@ pub(crate) fn palette_regions_bytes() -> u64 {
         + rig_origin_region_bytes()
         + crate::mat_anim_table::region_bytes()
         + crate::straddle::region_bytes()
-        + MAX_PALETTE_BONES as u64 * BONE_BYTES
+        + previous_rig_origin_region_bytes()
+        + 2 * MAX_PALETTE_BONES as u64 * BONE_BYTES
+}
+
+/// The allocation identity of one palette slot. A slot's base cannot move while it is live; a
+/// generation change therefore means a previous row could belong to a different rig.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SlotTemporalState {
+    len: u32,
+    generation: u64,
 }
 
 /// The main-world palette table: `Arc`-shared rows and slot table, the slot and bone-range slabs.
@@ -71,8 +99,12 @@ pub struct RigPalettes {
     origin_generation: u64,
     /// Bumped only for a mirrored slot's origin, so world traffic skips the booth buffers.
     origin_mirror_generation: u64,
-    /// Per-slot bone count; 0 = free slot.
-    slot_len: Vec<u32>,
+    /// Per-slot allocation identity, extracted with the rows for temporal reuse detection.
+    slot_state: Arc<Vec<SlotTemporalState>>,
+    /// Bumped whenever [`Self::slot_state`] changes, so a reset-only frame is extracted too.
+    slot_state_generation: u64,
+    /// Bumped by the explicit all-rig temporal reset API.
+    temporal_generation: u64,
     free_slots: Vec<u16>,
     slot_high: usize,
     /// Free bone ranges `(base, len)`, kept sorted by base and coalesced on free.
@@ -105,7 +137,9 @@ impl Default for RigPalettes {
             origins: Arc::new(vec![[0.0; 4]; MAX_RIG_SLOTS]),
             origin_generation: 0,
             origin_mirror_generation: 0,
-            slot_len: vec![0; MAX_RIG_SLOTS],
+            slot_state: Arc::new(vec![SlotTemporalState::default(); MAX_RIG_SLOTS]),
+            slot_state_generation: 0,
+            temporal_generation: 0,
             mirrored: vec![false; MAX_RIG_SLOTS],
             free_slots: Vec::new(),
             slot_high: 1, // slot 0 = the "no rig" tag sentinel
@@ -223,7 +257,10 @@ impl RigPalettes {
         let r1 = r1.min(rows.len());
         rows[r0..r1].fill([0.0; 4]);
         Arc::make_mut(&mut self.table)[slot as usize] = base;
-        self.slot_len[slot as usize] = bones;
+        let state = &mut Arc::make_mut(&mut self.slot_state)[slot as usize];
+        state.len = bones;
+        state.generation = state.generation.wrapping_add(1);
+        self.slot_state_generation = self.slot_state_generation.wrapping_add(1);
         self.mirrored[slot as usize] = false;
         self.table_generation += 1;
         self.live_bones += bones;
@@ -238,11 +275,19 @@ impl RigPalettes {
     /// one-frame despawn skew reads a matrix collapsed at the origin, never another rig's pose.
     pub fn free(&mut self, slot: u16) {
         let s = slot as usize;
-        let Some(&len) = self.slot_len.get(s).filter(|&&l| l > 0) else {
+        let Some(len) = self
+            .slot_state
+            .get(s)
+            .map(|state| state.len)
+            .filter(|&l| l > 0)
+        else {
             return;
         };
         let base = self.table[s];
-        self.slot_len[s] = 0;
+        let state = &mut Arc::make_mut(&mut self.slot_state)[s];
+        state.len = 0;
+        state.generation = state.generation.wrapping_add(1);
+        self.slot_state_generation = self.slot_state_generation.wrapping_add(1);
         self.free_slots.push(slot);
         self.live_bones -= len;
         self.table_generation += 1;
@@ -371,9 +416,10 @@ impl RigPalettes {
     /// unchanged frame is a no-op, by bit equality so a sub-epsilon move still lands.
     pub(crate) fn write_rider(&mut self, slot: u16, frame: Affine3A, origin: Vec3) {
         let s = slot as usize;
-        let (Some(&base), Some(&len)) = (self.table.get(s), self.slot_len.get(s)) else {
+        let (Some(&base), Some(state)) = (self.table.get(s), self.slot_state.get(s)) else {
             return;
         };
+        let len = state.len;
         if len == 0 {
             return;
         }
@@ -433,7 +479,7 @@ impl RigPalettes {
     /// The rows of `slot` as `Mat4`s, `o` added to the translation column.
     fn rows_at(&self, slot: u16, bones: usize, o: [f32; 3]) -> Option<Vec<Mat4>> {
         let s = slot as usize;
-        let len = (*self.slot_len.get(s)? as usize).min(bones);
+        let len = (self.slot_state.get(s)?.len as usize).min(bones);
         if len == 0 {
             return None;
         }
@@ -469,7 +515,7 @@ impl RigPalettes {
     /// The same pair for any bone: a posed rider (the flexing ranged prop) differs by row.
     pub fn row_placement(&self, slot: u16, bone: u32) -> Option<(Vec3, Vec3)> {
         let s = slot as usize;
-        if bone >= *self.slot_len.get(s)? {
+        if bone >= self.slot_state.get(s)?.len {
             return None;
         }
         let r = 3 * (*self.table.get(s)? + bone) as usize;
@@ -484,7 +530,9 @@ impl RigPalettes {
     /// since an allocated but never-computed rig renders collapsed at the origin.
     pub fn computed_rigs(&self) -> usize {
         (0..self.slot_high)
-            .filter(|&s| self.slot_len[s] > 0 && self.rows[3 * self.table[s] as usize] != [0.0; 4])
+            .filter(|&s| {
+                self.slot_state[s].len > 0 && self.rows[3 * self.table[s] as usize] != [0.0; 4]
+            })
             .count()
     }
 
@@ -502,6 +550,26 @@ impl RigPalettes {
     /// [`crate::doodad_anim::REAP_LOW_WATER`], and the unit heal waits for room.
     pub fn slot_headroom(&self) -> usize {
         MAX_RIG_SLOTS - self.slot_high + self.free_slots.len()
+    }
+
+    /// Prevent one discontinuous pose change from borrowing an unrelated older pose. The next
+    /// render upload seeds this slot's previous bank from its current rows and origin.
+    pub fn invalidate_temporal_slot(&mut self, slot: u16) {
+        let Some(state) = self.slot_state.get(slot as usize).copied() else {
+            return;
+        };
+        if state.len == 0 {
+            return;
+        }
+        Arc::make_mut(&mut self.slot_state)[slot as usize].generation =
+            state.generation.wrapping_add(1);
+        self.slot_state_generation = self.slot_state_generation.wrapping_add(1);
+    }
+
+    /// Invalidate every rig after a discontinuity such as a world transfer. Rows remain intact;
+    /// the render upload makes the prior bank equal the current bank on its next frame.
+    pub fn invalidate_temporal_history(&mut self) {
+        self.temporal_generation = self.temporal_generation.wrapping_add(1);
     }
 }
 
@@ -648,10 +716,13 @@ struct RigPaletteExtract {
     rows: Arc<Vec<[f32; 4]>>,
     table: Arc<Vec<u32>>,
     origins: Arc<Vec<[f32; 4]>>,
+    slots: Arc<Vec<SlotTemporalState>>,
     dirty: Arc<Vec<(u32, u32, bool)>>,
     table_generation: u64,
     origin_generation: u64,
     origin_mirror_generation: u64,
+    slot_state_generation: u64,
+    temporal_generation: u64,
 }
 
 impl Default for RigPaletteExtract {
@@ -660,11 +731,14 @@ impl Default for RigPaletteExtract {
             rows: Arc::new(Vec::new()),
             table: Arc::new(Vec::new()),
             origins: Arc::new(Vec::new()),
+            slots: Arc::new(Vec::new()),
             dirty: Arc::new(Vec::new()),
             // != RigPalettes' initial 0, so the first publish uploads even an empty table.
             table_generation: u64::MAX,
             origin_generation: u64::MAX,
             origin_mirror_generation: u64::MAX,
+            slot_state_generation: u64::MAX,
+            temporal_generation: u64::MAX,
         }
     }
 }
@@ -674,6 +748,8 @@ fn publish_rig_palettes(mut palettes: ResMut<RigPalettes>, mut out: ResMut<RigPa
     if palettes.dirty.is_empty()
         && out.table_generation == palettes.table_generation
         && out.origin_generation == palettes.origin_generation
+        && out.slot_state_generation == palettes.slot_state_generation
+        && out.temporal_generation == palettes.temporal_generation
     {
         return;
     }
@@ -691,10 +767,39 @@ fn publish_rig_palettes(mut palettes: ResMut<RigPalettes>, mut out: ResMut<RigPa
     out.rows = Arc::clone(&p.rows);
     out.table = Arc::clone(&p.table);
     out.origins = Arc::clone(&p.origins);
+    out.slots = Arc::clone(&p.slot_state);
     out.dirty = Arc::new(std::mem::take(&mut p.dirty));
     out.table_generation = p.table_generation;
     out.origin_generation = p.origin_generation;
     out.origin_mirror_generation = p.origin_mirror_generation;
+    out.slot_state_generation = p.slot_state_generation;
+    out.temporal_generation = p.temporal_generation;
+}
+
+/// Render-owned snapshots, deliberately rotated after main-world extraction rather than while
+/// simulation updates. `previous` is thus the last submitted palette state, not an intermediate
+/// fixed/update tick.
+#[derive(Resource, Default)]
+struct RigPaletteHistory {
+    current: Option<RigPaletteExtract>,
+    previous: Option<RigPaletteExtract>,
+}
+
+impl RigPaletteHistory {
+    fn advance(&mut self, next: RigPaletteExtract) {
+        self.previous = Some(self.current.replace(next.clone()).unwrap_or(next));
+    }
+}
+
+/// Runs after [`ExtractResourcePlugin`]. Every extract/render frame advances history, including a
+/// repeated snapshot: the frame after motion then has current == previous instead of retaining
+/// stale velocity. The upload path still gates writes on immutable data and dirty generations.
+fn extract_rig_palette_history(
+    data: Option<Res<RigPaletteExtract>>,
+    mut history: ResMut<RigPaletteHistory>,
+) {
+    let Some(data) = data else { return };
+    history.advance(data.as_ref().clone());
 }
 
 /// The glue and portrait booths' studio light buffers, which mirror the palette regions.
@@ -707,87 +812,291 @@ pub struct RigPaletteMirrors(
 #[derive(Default)]
 struct UploadedGenerations {
     table: Option<u64>,
-    dirty: u64,
-    origin: Option<u64>,
-    origin_mirror: Option<u64>,
+    current_dirty: u64,
+    current_origin: Option<u64>,
+    current_origin_mirror: Option<u64>,
+    current_slots: Option<Arc<Vec<SlotTemporalState>>>,
+    previous_dirty: u64,
+    previous_origin: Option<u64>,
+    previous_slots: Option<Arc<Vec<SlotTemporalState>>>,
+    temporal_generation: Option<u64>,
 }
 
-/// Render world (`PrepareResources`): write the dirty rows, and on change the slot and origin
-/// tables, into the shared buffer and every mirror.
+/// Ranges whose allocation identity changed since `previous`. `None` makes every live slot a
+/// seed range, which initializes a newly created GPU bank without relying on zeroed memory.
+fn changed_slot_ranges(
+    current: &[SlotTemporalState],
+    previous: Option<&[SlotTemporalState]>,
+    table: &[u32],
+) -> Vec<(u32, u32)> {
+    current
+        .iter()
+        .enumerate()
+        .filter(|&(slot, &state)| {
+            state.len > 0 && previous.and_then(|states| states.get(slot)).copied() != Some(state)
+        })
+        .map(|(slot, state)| (table.get(slot).copied().unwrap_or_default(), state.len))
+        .collect()
+}
+
+/// Every active slot's range, used for an explicit all-rig temporal reset.
+fn active_slot_ranges(slots: &[SlotTemporalState], table: &[u32]) -> Vec<(u32, u32)> {
+    slots
+        .iter()
+        .enumerate()
+        .filter(|&(_, state)| state.len > 0)
+        .map(|(slot, state)| (table.get(slot).copied().unwrap_or_default(), state.len))
+        .collect()
+}
+
+fn upload_ranges(
+    queue: &RenderQueue,
+    buffer: &bevy::render::render_resource::Buffer,
+    region: u64,
+    rows: &[[f32; 4]],
+    ranges: &[(u32, u32)],
+) -> (u32, u64) {
+    let mut calls = 0;
+    let mut bytes = 0;
+    for &(base, len) in ranges {
+        let rows = &rows[3 * base as usize..3 * (base + len) as usize];
+        queue.write_buffer(
+            buffer,
+            region + base as u64 * BONE_BYTES,
+            bytemuck::cast_slice(rows),
+        );
+        calls += 1;
+        bytes += len as u64 * BONE_BYTES;
+    }
+    (calls, bytes)
+}
+
+/// Render world (`PrepareResources`): write current rows to every compatible buffer and preserve
+/// the prior extracted rows/origins in the world's shared buffer for a future velocity pass.
 fn upload_rig_palettes(
     queue: Res<RenderQueue>,
     shared: Option<Res<crate::lighting::SharedLightBuffer>>,
     mirrors: Option<Res<RigPaletteMirrors>>,
-    data: Option<Res<RigPaletteExtract>>,
+    history: Option<Res<RigPaletteHistory>>,
     mut last: Local<UploadedGenerations>,
 ) {
-    let Some(data) = data else { return };
-    // The extract clones every frame, so gate on content.
-    let dirty_ptr = Arc::as_ptr(&data.dirty) as u64;
-    let table_new = last.table != Some(data.table_generation);
-    let dirty_new = last.dirty != dirty_ptr && !data.dirty.is_empty();
+    let Some(history) = history else { return };
+    let (Some(current), Some(previous)) = (&history.current, &history.previous) else {
+        return;
+    };
+    // The extract clones every frame, so gate on immutable content rather than resource changes.
+    let current_dirty_ptr = Arc::as_ptr(&current.dirty) as u64;
+    let previous_dirty_ptr = Arc::as_ptr(&previous.dirty) as u64;
+    let table_new = last.table != Some(current.table_generation);
+    let current_dirty_new = last.current_dirty != current_dirty_ptr && !current.dirty.is_empty();
     // The 32 KB origin table is written whole; the mirrors gate on their own generation.
-    let origin_new = last.origin != Some(data.origin_generation) && !data.origins.is_empty();
-    let origin_mirror_new =
-        last.origin_mirror != Some(data.origin_mirror_generation) && !data.origins.is_empty();
-    if !table_new && !dirty_new && !origin_new && !origin_mirror_new {
+    let current_origin_new =
+        last.current_origin != Some(current.origin_generation) && !current.origins.is_empty();
+    let current_origin_mirror_new = last.current_origin_mirror
+        != Some(current.origin_mirror_generation)
+        && !current.origins.is_empty();
+    let previous_dirty_new =
+        last.previous_dirty != previous_dirty_ptr && !previous.dirty.is_empty();
+    let previous_origin_new =
+        last.previous_origin != Some(previous.origin_generation) && !previous.origins.is_empty();
+    let current_seed = coalesce_ranges(changed_slot_ranges(
+        &current.slots,
+        last.current_slots.as_deref().map(Vec::as_slice),
+        &current.table,
+    ));
+    let previous_seed = coalesce_ranges(changed_slot_ranges(
+        &previous.slots,
+        last.previous_slots.as_deref().map(Vec::as_slice),
+        &previous.table,
+    ));
+    // A reused slot, a bone-count change, or an explicit slot reset gets zero velocity.
+    let invalid_previous = coalesce_ranges(changed_slot_ranges(
+        &current.slots,
+        Some(&previous.slots),
+        &current.table,
+    ));
+    let reset_all = last
+        .temporal_generation
+        .is_some_and(|generation| generation != current.temporal_generation);
+    let reset_ranges = if reset_all {
+        coalesce_ranges(active_slot_ranges(&current.slots, &current.table))
+    } else {
+        Vec::new()
+    };
+    if !table_new
+        && !current_dirty_new
+        && !current_origin_new
+        && !current_origin_mirror_new
+        && !previous_dirty_new
+        && !previous_origin_new
+        && current_seed.is_empty()
+        && previous_seed.is_empty()
+        && invalid_previous.is_empty()
+        && reset_ranges.is_empty()
+    {
         return;
     }
     *last = UploadedGenerations {
-        table: Some(data.table_generation),
-        dirty: dirty_ptr,
-        origin: Some(data.origin_generation),
-        origin_mirror: Some(data.origin_mirror_generation),
+        table: Some(current.table_generation),
+        current_dirty: current_dirty_ptr,
+        current_origin: Some(current.origin_generation),
+        current_origin_mirror: Some(current.origin_mirror_generation),
+        current_slots: Some(Arc::clone(&current.slots)),
+        previous_dirty: previous_dirty_ptr,
+        previous_origin: Some(previous.origin_generation),
+        previous_slots: Some(Arc::clone(&previous.slots)),
+        temporal_generation: Some(current.temporal_generation),
     };
     let cost_t0 = rig_cost_enabled().then(std::time::Instant::now);
     let mut cost_calls = 0u32;
     let mut cost_bytes = 0u64;
     // Coalesce first: each `write_buffer` call costs far more than its bytes.
-    let all = coalesce_ranges(data.dirty.iter().map(|&(b, l, _)| (b, l)).collect());
+    let mut current_all: Vec<_> = current.dirty.iter().map(|&(b, l, _)| (b, l)).collect();
+    current_all.extend_from_slice(&current_seed);
+    let current_all = coalesce_ranges(current_all);
     let mirrored_only = coalesce_ranges(
-        data.dirty
+        current
+            .dirty
             .iter()
             .filter(|&&(_, _, m)| m)
             .map(|&(b, l, _)| (b, l))
             .collect(),
     );
-    // Every target takes the slot table; the booth mirrors take only the mirrored ranges.
-    let targets = shared
-        .iter()
-        .map(|s| (&s.0, false))
-        .chain(mirrors.iter().flat_map(|m| m.0.values().map(|b| (b, true))));
-    for (buffer, mirror_only) in targets {
-        if table_new && !data.table.is_empty() {
+    if let Some(shared) = shared {
+        let buffer = &shared.0;
+        if table_new && !current.table.is_empty() {
             queue.write_buffer(
                 buffer,
                 rig_table_region_offset(),
-                bytemuck::cast_slice(&data.table),
+                bytemuck::cast_slice(&current.table),
             );
         }
-        if if mirror_only {
-            origin_mirror_new
-        } else {
-            origin_new
-        } {
+        if current_origin_new {
             queue.write_buffer(
                 buffer,
                 rig_origin_region_offset(),
-                bytemuck::cast_slice(&data.origins),
+                bytemuck::cast_slice(&current.origins),
             );
             cost_calls += 1;
             cost_bytes += rig_origin_region_bytes();
         }
-        if dirty_new {
-            let ranges = if mirror_only { &mirrored_only } else { &all };
-            for &(base, len) in ranges {
-                let rows = &data.rows[3 * base as usize..3 * (base + len) as usize];
+        if current_dirty_new || !current_seed.is_empty() {
+            let (calls, bytes) = upload_ranges(
+                &queue,
+                buffer,
+                palette_region_offset(),
+                &current.rows,
+                &current_all,
+            );
+            cost_calls += calls;
+            cost_bytes += bytes;
+        }
+        if previous_origin_new {
+            queue.write_buffer(
+                buffer,
+                previous_rig_origin_region_offset(),
+                bytemuck::cast_slice(&previous.origins),
+            );
+            cost_calls += 1;
+            cost_bytes += previous_rig_origin_region_bytes();
+        }
+        if previous_dirty_new {
+            let ranges = coalesce_ranges(previous.dirty.iter().map(|&(b, l, _)| (b, l)).collect());
+            let (calls, bytes) = upload_ranges(
+                &queue,
+                buffer,
+                previous_palette_region_offset(),
+                &previous.rows,
+                &ranges,
+            );
+            cost_calls += calls;
+            cost_bytes += bytes;
+        }
+        if !previous_seed.is_empty() {
+            let (calls, bytes) = upload_ranges(
+                &queue,
+                buffer,
+                previous_palette_region_offset(),
+                &previous.rows,
+                &previous_seed,
+            );
+            cost_calls += calls;
+            cost_bytes += bytes;
+        }
+        if !invalid_previous.is_empty() {
+            let (calls, bytes) = upload_ranges(
+                &queue,
+                buffer,
+                previous_palette_region_offset(),
+                &current.rows,
+                &invalid_previous,
+            );
+            cost_calls += calls;
+            cost_bytes += bytes;
+            for &(base, len) in &invalid_previous {
+                for (slot, state) in current.slots.iter().enumerate() {
+                    if state.len > 0
+                        && current.table.get(slot).copied() == Some(base)
+                        && state.len == len
+                    {
+                        queue.write_buffer(
+                            buffer,
+                            previous_rig_origin_region_offset() + slot as u64 * 16,
+                            bytemuck::bytes_of(&current.origins[slot]),
+                        );
+                        cost_calls += 1;
+                        cost_bytes += 16;
+                    }
+                }
+            }
+        }
+        if reset_all {
+            queue.write_buffer(
+                buffer,
+                previous_rig_origin_region_offset(),
+                bytemuck::cast_slice(&current.origins),
+            );
+            let (calls, bytes) = upload_ranges(
+                &queue,
+                buffer,
+                previous_palette_region_offset(),
+                &current.rows,
+                &reset_ranges,
+            );
+            cost_calls += calls + 1;
+            cost_bytes += bytes + previous_rig_origin_region_bytes();
+        }
+    }
+    // Studio mirrors reserve the same expanded layout but have no motion-vector pass yet. Keep
+    // their existing current-pose contract until a consumer needs their previous bank.
+    if table_new || current_origin_mirror_new || current_dirty_new {
+        for buffer in mirrors.iter().flat_map(|m| m.0.values()) {
+            if table_new && !current.table.is_empty() {
                 queue.write_buffer(
                     buffer,
-                    palette_region_offset() + base as u64 * BONE_BYTES,
-                    bytemuck::cast_slice(rows),
+                    rig_table_region_offset(),
+                    bytemuck::cast_slice(&current.table),
+                );
+            }
+            if current_origin_mirror_new {
+                queue.write_buffer(
+                    buffer,
+                    rig_origin_region_offset(),
+                    bytemuck::cast_slice(&current.origins),
                 );
                 cost_calls += 1;
-                cost_bytes += len as u64 * BONE_BYTES;
+                cost_bytes += rig_origin_region_bytes();
+            }
+            if current_dirty_new {
+                let (calls, bytes) = upload_ranges(
+                    &queue,
+                    buffer,
+                    palette_region_offset(),
+                    &current.rows,
+                    &mirrored_only,
+                );
+                cost_calls += calls;
+                cost_bytes += bytes;
             }
         }
     }
@@ -927,6 +1236,10 @@ pub fn plugin(app: &mut App) {
                 .after(crate::billboard::BillboardPlace),
         );
     if let Some(render) = app.get_sub_app_mut(RenderApp) {
+        render.init_resource::<RigPaletteHistory>().add_systems(
+            ExtractSchedule,
+            extract_rig_palette_history.after(extract_resource::<RigPaletteExtract>),
+        );
         render.add_systems(
             Render,
             upload_rig_palettes.in_set(RenderSystems::PrepareResources),
@@ -1204,6 +1517,67 @@ mod tests {
     }
 
     #[test]
+    fn slot_reuse_changes_the_temporal_identity() {
+        let mut p = RigPalettes::default();
+        let (slot, _) = p.alloc(2).unwrap();
+        let before = (*p.slot_state).clone();
+        p.free(slot);
+        let (reused, base) = p.alloc(2).unwrap();
+        assert_eq!(reused, slot, "the allocator reuses the free slot");
+        assert!(
+            p.slot_state[slot as usize].generation > before[slot as usize].generation,
+            "a new owner must not inherit the former rig's temporal pose"
+        );
+        assert_eq!(
+            changed_slot_ranges(&p.slot_state, Some(&before), &p.table),
+            vec![(base, 2)],
+            "the previous bank must seed from the new current rows"
+        );
+    }
+
+    #[test]
+    fn explicit_slot_invalidation_seeds_current_as_previous() {
+        let mut p = RigPalettes::default();
+        let (slot, base) = p.alloc(3).unwrap();
+        let before = (*p.slot_state).clone();
+        p.invalidate_temporal_slot(slot);
+        assert_eq!(
+            changed_slot_ranges(&p.slot_state, Some(&before), &p.table),
+            vec![(base, 3)]
+        );
+    }
+
+    #[test]
+    fn render_history_keeps_the_last_extracted_snapshot() {
+        let mut history = RigPaletteHistory::default();
+        let first = RigPaletteExtract {
+            table_generation: 7,
+            ..default()
+        };
+        history.advance(first);
+        assert_eq!(history.current.as_ref().unwrap().table_generation, 7);
+        assert_eq!(history.previous.as_ref().unwrap().table_generation, 7);
+
+        let second = RigPaletteExtract {
+            table_generation: 8,
+            ..default()
+        };
+        history.advance(second.clone());
+        assert_eq!(history.current.as_ref().unwrap().table_generation, 8);
+        assert_eq!(
+            history.previous.as_ref().unwrap().table_generation,
+            7,
+            "the frame before extraction N is the previous state for N"
+        );
+        history.advance(second);
+        assert_eq!(
+            history.previous.as_ref().unwrap().table_generation,
+            8,
+            "a still frame catches prior pose up after the moving frame"
+        );
+    }
+
+    #[test]
     fn region_layout_is_consistent() {
         // `wow_model.wgsl` mirrors this layout, and wgpu checks the bound size against its struct
         // at draw time, so a mismatch fails there.
@@ -1228,9 +1602,19 @@ mod tests {
             "the straddle clip table follows the mat-anim table"
         );
         assert_eq!(
-            palette_region_offset() - crate::straddle::region_offset(),
+            previous_rig_origin_region_offset() - crate::straddle::region_offset(),
             crate::straddle::region_bytes(),
-            "the palette rows follow the straddle clip table"
+            "the previous-origin table follows the straddle clip table"
+        );
+        assert_eq!(
+            palette_region_offset() - previous_rig_origin_region_offset(),
+            previous_rig_origin_region_bytes(),
+            "the palette rows follow the previous-origin table"
+        );
+        assert_eq!(
+            previous_palette_region_offset() - palette_region_offset(),
+            PALETTE_ROWS * 16,
+            "the previous rows follow the current palette bank"
         );
         assert_eq!(
             palette_regions_bytes(),
@@ -1239,10 +1623,15 @@ mod tests {
                 + rig_origin_region_bytes()
                 + crate::mat_anim_table::region_bytes()
                 + crate::straddle::region_bytes()
-                + (MAX_PALETTE_BONES as u64) * BONE_BYTES
+                + previous_rig_origin_region_bytes()
+                + 2 * (MAX_PALETTE_BONES as u64) * BONE_BYTES
         );
         // One `vec4` a slot: the shader declares `array<vec4<f32>, 2048>`.
         assert_eq!(rig_origin_region_bytes(), (MAX_RIG_SLOTS * 16) as u64);
+        assert_eq!(
+            previous_rig_origin_region_bytes(),
+            (MAX_RIG_SLOTS * 16) as u64
+        );
         // One word a slot: the shader declares `array<u32, 2048>` for both tables.
         assert_eq!(
             crate::instance_tint::region_bytes(),
