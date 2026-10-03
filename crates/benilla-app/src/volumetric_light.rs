@@ -761,6 +761,6 @@ mod tests {
         assert_eq!(VolLightOverride(None).tier(&video), 2);
         assert_eq!(VolLightOverride(Some(1)).tier(&video), 1);
         assert_eq!(STEPS[0], 0.0);
-        assert!(STEPS[2] > STEPS[1]);
+        const { assert!(STEPS[2] > STEPS[1]) };
     }
 }

@@ -645,6 +645,22 @@ pub(crate) fn class_tc(class: u8) -> Option<[f32; 4]> {
     })
 }
 
+/// `GlueButtons.xml` texcoords: Up/Down/Disabled share one region, the Highlight has its own.
+pub(crate) const BUTTON_TC: [f32; 4] = [0.0, 0.578125, 0.0, 0.75];
+pub(crate) const BUTTON_HI_TC: [f32; 4] = [0.0, 0.625, 0.0, 0.6875];
+/// The scrollbar buttons and knob sit in the center quarter of their sheets.
+pub(crate) const SCROLL_BTN_TC: [f32; 4] = [0.25, 0.75, 0.25, 0.75];
+
+/// Texcoords to an `ImageNode` pixel rect on a texture of `size`.
+pub(crate) fn tc_rect(size: Vec2, tc: [f32; 4]) -> Rect {
+    Rect::new(
+        tc[0] * size.x,
+        tc[2] * size.y,
+        tc[1] * size.x,
+        tc[3] * size.y,
+    )
+}
+
 #[cfg(test)]
 mod race_icon_tests {
     use super::*;
@@ -667,20 +683,4 @@ mod race_icon_tests {
         assert_eq!(cells[&10][0], [0.8, 1.0, 0.25, 0.5]);
         assert_eq!(cells[&10][1], [0.8, 1.0, 0.75, 1.0]);
     }
-}
-
-/// `GlueButtons.xml` texcoords: Up/Down/Disabled share one region, the Highlight has its own.
-pub(crate) const BUTTON_TC: [f32; 4] = [0.0, 0.578125, 0.0, 0.75];
-pub(crate) const BUTTON_HI_TC: [f32; 4] = [0.0, 0.625, 0.0, 0.6875];
-/// The scrollbar buttons and knob sit in the center quarter of their sheets.
-pub(crate) const SCROLL_BTN_TC: [f32; 4] = [0.25, 0.75, 0.25, 0.75];
-
-/// Texcoords to an `ImageNode` pixel rect on a texture of `size`.
-pub(crate) fn tc_rect(size: Vec2, tc: [f32; 4]) -> Rect {
-    Rect::new(
-        tc[0] * size.x,
-        tc[2] * size.y,
-        tc[1] * size.x,
-        tc[3] * size.y,
-    )
 }

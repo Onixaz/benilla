@@ -572,7 +572,9 @@ fn group_names(bytes: &[u8]) -> Vec<Option<String>> {
     let (Some(mogn), Some(mogi)) = (mogn, mogi) else {
         return Vec::new();
     };
-    mogi.chunks_exact(32)
+    mogi.as_chunks::<32>()
+        .0
+        .iter()
         .map(|r| {
             let off = i32::from_le_bytes(r[28..32].try_into().unwrap());
             let off = usize::try_from(off).ok()?;
@@ -701,7 +703,7 @@ fn batch_class_table(
                     n += 1;
                 }
             }
-            let mean = |s: u32| if n == 0 { 0 } else { s / n };
+            let mean = |s: u32| s.checked_div(n).unwrap_or(0);
             println!(
                 "     b{bi:<3} {class:<5} tris {:>5}  a[{:>3}..{:>3}] mean {:>3}  mocv rgb ({:>3},{:>3},{:>3})  box ({:>7.2},{:>7.2},{:>6.2})..({:>7.2},{:>7.2},{:>6.2})",
                 idx.len() / 3,
@@ -972,7 +974,7 @@ pub fn wmolights(chain: &mut Chain, raw_path: &str, verts: Option<usize>) -> Res
         }
     }
     println!();
-    batch_class_table(chain, &root, &root_path, &names, &infos, verts);
+    batch_class_table(chain, &root, &root_path, &names, infos, verts);
     for (i, l) in lights.iter().enumerate() {
         let prod = [
             l.color[0] * l.intensity,

@@ -1799,8 +1799,8 @@ mod tests {
                 apply_lighting_preset(&mut cvars, name);
                 // Somewhere else on the row's own scale: the flags flip, the numbers move by one.
                 let moved = match v.trim().parse::<f32>() {
-                    Ok(x) if x == 0.0 => "1".to_string(),
-                    Ok(x) if x == 1.0 => "0".to_string(),
+                    Ok(0.0) => "1".to_string(),
+                    Ok(1.0) => "0".to_string(),
                     Ok(x) => (x + 1.0).to_string(),
                     Err(_) => format!("{v}x"),
                 };

@@ -175,8 +175,10 @@ mod tests {
 
     #[test]
     fn the_ripple_clock_wraps() {
-        let mut w = Wetness::default();
-        w.ripple_time_s = RIPPLE_WRAP_S - 0.05;
+        let mut w = Wetness {
+            ripple_time_s: RIPPLE_WRAP_S - 0.05,
+            ..Default::default()
+        };
         w.step(0.0, 0.1);
         assert!(w.ripple_time_s < 0.1);
     }
