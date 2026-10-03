@@ -316,6 +316,14 @@ fn spawn_slot(
         && dm.animations.as_ref().is_some_and(|a| {
             a.owns(crate::ranged_flex::BOW_PULL) || a.owns(crate::ranged_flex::BOW_RELEASE)
         });
+    // Posed: the reference arms animation 0 on every M2 at load, so an attached model whose idle
+    // moves a bone off its rest pose draws in that pose (an HD helm keys its one bone 0.18 down).
+    let idle_posed = flexes
+        || (!dm.skeleton.joints.is_empty()
+            && dm
+                .animations
+                .as_ref()
+                .is_some_and(|a| a.first_seq.is_some()));
     // The item rig, for geometry welded to a billboard bone (an R14 pauldron's spikes): the
     // reference billboards an attached model like a standalone one (`0x718657`..`0x71876f`),
     // blending the bone's camera-replaced row per vertex (`0x71a460`). All seven such models are
@@ -357,9 +365,9 @@ fn spawn_slot(
             benilla_world::rig_palette::RigSkin::allocate_bones(
                 palettes,
                 dm.skeleton.joints.len() as u32,
-                // A resting rider's rows are the placement alone; a flexing prop's are
+                // A resting rider's rows are the placement alone; a posed prop's are
                 // `F × model[b] × ibp[b]`.
-                if flexes {
+                if idle_posed {
                     dm.inverse_bindposes.clone().unwrap_or_default()
                 } else {
                     Handle::default()
@@ -381,11 +389,11 @@ fn spawn_slot(
             slot
         }),
     };
-    // The flexing prop's pose and clock, armed as the reference arms every M2 at load (animation 0
+    // The posed prop's pose and clock, armed as the reference arms every M2 at load (animation 0
     // through its `playableAnimationLookup`). Its palette rows stay the rider's, composed in the
     // wearer's frame, not from its own `GlobalTransform`.
-    let mut prop_pose = (flexes && rider.is_some()).then(|| {
-        let anims = dm.animations.as_ref().expect("flexes ⇒ animations");
+    let mut prop_pose = (idle_posed && rider.is_some()).then(|| {
+        let anims = dm.animations.as_ref().expect("idle_posed ⇒ animations");
         let mut player = AnimationPlayer::default();
         if let Some(idle) = anims.idle_clip() {
             let active = player.play(idle.node);
@@ -397,8 +405,12 @@ fn spawn_slot(
             player,
             AnimationGraphHandle(anims.graph.clone()),
             anims.clone(),
-            crate::ranged_flex::RangedProp { owner: entity },
         ));
+        if flexes {
+            commands
+                .entity(root)
+                .insert(crate::ranged_flex::RangedProp { owner: entity });
+        }
         benilla_world::rig_anim::RigPose::new(root, &dm.skeleton)
     });
     // The slot each part's `MeshTag` carries: the item's own when it has one, as the vertex stage
@@ -468,8 +480,8 @@ fn spawn_slot(
             // The authored alpha, `colourAlpha × weight` (`0x707680`), pinned to the file's first
             // sequence and composed into the tag in the unit lane's order.
             if let Some(anim) = &part.alpha_anim {
-                // A flexing prop's alpha follows its own player.
-                child.insert(if flexes {
+                // A posed prop's alpha follows its own player.
+                child.insert(if idle_posed {
                     benilla_world::doodad_anim::MatAnim::following(anim.clone(), root)
                 } else {
                     benilla_world::doodad_anim::MatAnim::resting(anim.clone())
@@ -601,9 +613,9 @@ fn spawn_slot(
                 // The wearer's light node, aliased into each attached model (`0x718960`).
                 light_node: Some(entity),
             },
-            // A resting item's emitters run its loader-idle sequence; a flexing prop's the one it
+            // A resting item's emitters run its loader-idle sequence; a posed prop's the one it
             // plays, since a gun's blast is keyed only in BowRelease.
-            if flexes {
+            if idle_posed {
                 benilla_world::particles::EmitClock::Host(root)
             } else {
                 benilla_world::particles::EmitClock::Pinned
