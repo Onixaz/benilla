@@ -1,6 +1,12 @@
 fn main() {
     println!("cargo::rerun-if-env-changed=DLSS_SDK");
 
+    // Only `--features dlss` (this crate's `ngx`) links the SDK; a workspace build compiles the
+    // NGX calls as failures and needs neither the SDK nor Windows.
+    if std::env::var_os("CARGO_FEATURE_NGX").is_none() {
+        return;
+    }
+
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         panic!("benilla-dlss5 is supported on Windows only");
     }

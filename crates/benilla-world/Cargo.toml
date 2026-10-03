@@ -16,7 +16,7 @@ default = ["dev"]
 # see the name"); set here so `benilla-worldview`, which reports those names, gets it too.
 dev = ["benilla-formats/dev", "benilla-assets/dev", "bevy/debug"]
 # The optional Feature-18 graph edge keeps the isolated NGX crate out of normal world builds.
-dlss = ["dep:benilla-dlss5"]
+dlss = ["dep:benilla-dlss5", "benilla-dlss5/ngx"]
 [dependencies]
 avian3d = "0.6"
 benilla-assets = { path = "../benilla-assets", default-features = false }

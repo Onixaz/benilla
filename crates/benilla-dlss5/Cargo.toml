@@ -12,6 +12,8 @@ workspace = true
 [features]
 # The A/B key is an instrument, never a player-facing setting.
 dev = []
+# Links the NVIDIA NGX SDK named by `DLSS_SDK`; without it the NGX calls report failure.
+ngx = []
 
 [dependencies]
 ash.workspace = true

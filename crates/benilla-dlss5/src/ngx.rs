@@ -15,6 +15,7 @@ const NGX_SUCCESS: u32 = 1;
 type VkHandle = *const c_void;
 type Pfn = *const c_void;
 
+#[cfg(feature = "ngx")]
 unsafe extern "C" {
     fn NVSDK_NGX_VULKAN_Init_with_ProjectID(
         project_id: *const c_char,
@@ -38,6 +39,47 @@ unsafe extern "C" {
         name: *const c_char,
         value: *const c_void,
     );
+}
+
+// Without the `ngx` feature the SDK is not linked, so `--workspace` builds on any machine: the core
+// init reports NGX's generic failure and nothing past it runs.
+#[cfg(not(feature = "ngx"))]
+use ngx_absent::*;
+#[cfg(not(feature = "ngx"))]
+#[allow(non_snake_case, clippy::missing_safety_doc)]
+mod ngx_absent {
+    use super::{c_char, c_void, Pfn, VkHandle};
+    /// `NVSDK_NGX_Result_Fail`.
+    const NGX_FAIL: u32 = 0xBAD0_0000;
+
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn NVSDK_NGX_VULKAN_Init_with_ProjectID(
+        _: *const c_char,
+        _: u32,
+        _: *const c_char,
+        _: *const u16,
+        _: VkHandle,
+        _: VkHandle,
+        _: VkHandle,
+        _: Pfn,
+        _: Pfn,
+        _: *const c_void,
+        _: u32,
+    ) -> u32 {
+        NGX_FAIL
+    }
+    pub unsafe fn NVSDK_NGX_VULKAN_GetCapabilityParameters(_: *mut *mut c_void) -> u32 {
+        NGX_FAIL
+    }
+    pub unsafe fn NVSDK_NGX_Parameter_SetUI(_: *mut c_void, _: *const c_char, _: u32) {}
+    pub unsafe fn NVSDK_NGX_Parameter_SetI(_: *mut c_void, _: *const c_char, _: i32) {}
+    pub unsafe fn NVSDK_NGX_Parameter_SetF(_: *mut c_void, _: *const c_char, _: f32) {}
+    pub unsafe fn NVSDK_NGX_Parameter_SetVoidPointer(
+        _: *mut c_void,
+        _: *const c_char,
+        _: *const c_void,
+    ) {
+    }
 }
 
 type InitExt2 = unsafe extern "C" fn(

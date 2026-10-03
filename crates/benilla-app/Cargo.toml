@@ -18,7 +18,7 @@ tracy = ["bevy/trace_tracy"]
 trace_chrome = ["bevy/trace_chrome"]
 # Keep the historical `--features dlss` developer switch. It enables Neural Rendering, not the
 # removed Super Resolution path.
-dlss = ["dep:benilla-dlss5", "benilla-world/dlss"]
+dlss = ["dep:benilla-dlss5", "benilla-dlss5/ngx", "benilla-world/dlss"]
 [dependencies]
 anyhow.workspace = true
 # The EditBox clipboard, on the main thread as NSPasteboard requires; bevy_egui's 3.x.
