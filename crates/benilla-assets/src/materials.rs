@@ -668,6 +668,32 @@ mod tests {
         );
     }
 
+    /// The prepass and the forward pass read one `wow_light` binding through two `WowLight`
+    /// declarations. A member missing on one side moves the rig table and palettes on that side
+    /// only: the prepass writes depth for scrambled geometry and the forward pass fails against it.
+    #[test]
+    fn model_prepass_mirrors_the_forward_light_struct() {
+        let layout = |src: &str| -> Vec<String> {
+            let body = src
+                .split_once("struct WowLight {")
+                .expect("both model passes declare the light struct")
+                .1;
+            body.split_once("\n}")
+                .expect("the struct is closed")
+                .0
+                .lines()
+                .map(|l| l.split_once("//").map_or(l, |(code, _)| code).trim())
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect()
+        };
+        assert_eq!(
+            layout(include_str!("shaders/wow_model_prepass.wgsl")),
+            layout(include_str!("shaders/wow_model.wgsl")),
+            "the prepass `WowLight` has drifted from wow_model.wgsl's"
+        );
+    }
+
     /// The sky depth law, for the one sky element that draws on the MODEL lane: the WMO skybox
     /// ([`WowModelKey::sky_depth`]). Every other sky shader is checked the same way, together, in
     /// `benilla_world::sky_order::the_sky_depth_is_pinned_at_the_vertex_and_nowhere_else` — this

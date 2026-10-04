@@ -90,6 +90,12 @@ impl SkinnedShadowCasterMaterial {
 }
 
 impl Material for SkinnedShadowCasterMaterial {
+    // Shadow pass only: the world camera's depth/motion prepass would draw the proxy into the
+    // view's depth and occlude the visible model it shadows for.
+    fn enable_prepass() -> bool {
+        false
+    }
+
     fn vertex_shader() -> ShaderRef {
         "embedded://benilla_app/shaders/shadow_caster_skinned.wgsl".into()
     }

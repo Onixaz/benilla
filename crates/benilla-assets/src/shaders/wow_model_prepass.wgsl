@@ -3,6 +3,7 @@
 // infer from an entity transform.
 
 #import benilla_assets::wow_model_skin::wow_skin_affine
+#import benilla::monkey_frame
 #import bevy_pbr::{
     mesh_functions,
     mesh_view_bindings::view,
@@ -34,6 +35,10 @@ struct WowLight {
     wmo_fog_params: vec4<f32>,
     point_count: vec4<f32>,
     points: array<vec4<f32>, 512>,
+    monkey: monkey_frame::MonkeyFrame,
+    shelter_hdr: vec4<f32>,
+    shelter_cfg: vec4<f32>,
+    shelter: array<u32, 16384>,
     prop_probes: array<vec4<f32>, 57344>,
     rig_table: array<u32, 2048>,
     rig_tint: array<u32, 2048>,

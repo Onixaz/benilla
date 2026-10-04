@@ -1022,6 +1022,8 @@ impl ViewNode for StaticGxNode {
         &'static MeshViewBindGroup,
         // The world camera only — a booth bake must never receive world cells (see the marker).
         &'static StaticGxView,
+        &'static Msaa,
+        Option<&'static ViewPrepassTextures>,
     );
 
     fn run<'w>(
@@ -1040,6 +1042,8 @@ impl ViewNode for StaticGxNode {
             maybe_oit,
             view_bind,
             _marker,
+            msaa,
+            prepass,
         ): QueryItem<'w, '_, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
@@ -1050,6 +1054,14 @@ impl ViewNode for StaticGxNode {
         }
         let cache = world.resource::<GxGpuCache>();
         let pipes = world.resource::<GxPipelines>();
+        // `prepare_static_gx` keys on the prepass textures before this frame's are inserted, so
+        // the frame a camera's prepasses change, its pipelines claim last frame's view layout;
+        // drawing then would fail validation against this frame's view bind group.
+        let view_key =
+            MeshPipelineViewLayoutKey::from(*msaa) | MeshPipelineViewLayoutKey::from(prepass);
+        if pipes.specialized_for.map(|(key, _, _)| key) != Some(view_key) {
+            return Ok(());
+        }
         let pipeline_cache = world.resource::<PipelineCache>();
         let Some(light_bind) = world.get_resource::<GxLightBind>() else {
             return Ok(());

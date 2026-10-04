@@ -95,6 +95,12 @@ pub(crate) struct CutoutShadowCasterMaterial {
 }
 
 impl Material for CutoutShadowCasterMaterial {
+    // Shadow pass only: the world camera's depth/motion prepass would draw the proxy into the
+    // view's depth and occlude the visible model it shadows for.
+    fn enable_prepass() -> bool {
+        false
+    }
+
     fn fragment_shader() -> ShaderRef {
         // Forward pass: still fully invisible — the shared proxy fragment discards every fragment.
         "embedded://benilla_app/shaders/shadow_caster.wgsl".into()

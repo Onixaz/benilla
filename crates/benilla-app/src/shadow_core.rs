@@ -341,6 +341,12 @@ pub(crate) struct ShadowCorePlugin;
 pub(crate) struct ShadowCasterMaterial {}
 
 impl Material for ShadowCasterMaterial {
+    // Shadow pass only: the world camera's depth/motion prepass would draw the proxy into the
+    // view's depth and occlude the visible model it shadows for.
+    fn enable_prepass() -> bool {
+        false
+    }
+
     fn fragment_shader() -> ShaderRef {
         "embedded://benilla_app/shaders/shadow_caster.wgsl".into()
     }
