@@ -28,24 +28,13 @@ if (-not $env:WOW_DLSSNR_DLL) {
     }
 }
 
+# `--features dlss` also builds the caller-identity bridge that NGX's Feature-18 snippet requires
+# (`benilla_nvngx.dll`, embedded in the executable): benilla.exe runs under its own name.
 cargo build -p benilla --release --features dlss
 if ($LASTEXITCODE -ne 0) {
     throw "cargo build failed with exit code $LASTEXITCODE"
 }
 
-$release = Join-Path $PSScriptRoot '..\target\release'
-$source = Join-Path $release 'benilla.exe'
-$neuralExecutable = Join-Path $release 'nvngx.dll'
-Copy-Item -LiteralPath $source -Destination $neuralExecutable -Force
-
-# NGX checks the image filename, not a loaded module. Keep benilla.exe untouched for normal runs.
-# PowerShell's call operator resolves `.dll` through file associations, although this is an EXE
-# image with a deliberate NGX-required filename. `UseShellExecute = $false` calls CreateProcess
-# directly, which accepts the PE image without consulting that association table.
-$start = [System.Diagnostics.ProcessStartInfo]::new()
-$start.FileName = $neuralExecutable
-$start.UseShellExecute = $false
-$start.Arguments = if ($null -eq $BenillaArgs) { '' } else { [string]::Join(' ', $BenillaArgs) }
-$process = [System.Diagnostics.Process]::Start($start)
-$process.WaitForExit()
-exit $process.ExitCode
+$executable = Join-Path $PSScriptRoot '..\target\release\benilla.exe'
+& $executable @BenillaArgs
+exit $LASTEXITCODE

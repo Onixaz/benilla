@@ -7,6 +7,8 @@ use std::os::raw::c_char;
 use std::path::Path;
 use std::ptr;
 
+use bevy::log::info;
+
 pub const FEATURE_DLSSNR: u32 = 18;
 /// The strongest supported Feature-18 blend for this experimental renderer.
 pub const DLSSNR_INTENSITY: f32 = 2.0;
@@ -99,6 +101,106 @@ type ReleaseFeature = unsafe extern "C" fn(*mut c_void) -> u32;
 type EvaluateFeature =
     unsafe extern "C" fn(VkHandle, *const c_void, *const c_void, *const c_void) -> u32;
 
+/// The caller-identity bridge's file name (`crates/benilla-nvngx`).
+pub const BRIDGE_DLL: &str = "benilla_nvngx.dll";
+
+/// The bridge `build.rs` compiles under `--features dlss`, written to the NGX data folder on use.
+#[cfg(feature = "ngx")]
+const BRIDGE_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/benilla_nvngx.dll"));
+
+type BridgeLoad = unsafe extern "C" fn(*const u16) -> *mut c_void;
+type BridgeInit = unsafe extern "C" fn(
+    InitExt2,
+    u64,
+    *const u16,
+    VkHandle,
+    VkHandle,
+    VkHandle,
+    Pfn,
+    Pfn,
+    u32,
+    *const c_void,
+) -> u32;
+type BridgeCreate = unsafe extern "C" fn(
+    CreateFeature,
+    VkHandle,
+    VkHandle,
+    u32,
+    *const c_void,
+    *mut *mut c_void,
+) -> u32;
+type BridgeEvaluate = unsafe extern "C" fn(
+    EvaluateFeature,
+    VkHandle,
+    *const c_void,
+    *const c_void,
+    *const c_void,
+) -> u32;
+type BridgeRelease = unsafe extern "C" fn(ReleaseFeature, *mut c_void) -> u32;
+
+/// The Feature-18 snippet creates its feature only for a caller whose module path contains
+/// `nvngx.dll`; this bridge, `benilla_nvngx.dll`, makes every snippet call from inside itself.
+struct Bridge {
+    _library: libloading::Library,
+    load: BridgeLoad,
+    init: BridgeInit,
+    create: BridgeCreate,
+    evaluate: BridgeEvaluate,
+    release: BridgeRelease,
+}
+
+impl Bridge {
+    /// The embedded bridge, written to `data_dir` when absent or stale. `None` only in a build
+    /// without the SDK, whose NGX calls all fail anyway.
+    unsafe fn open(data_dir: &Path) -> Result<Option<Self>, String> {
+        let Some(path) = Self::locate(data_dir)? else {
+            return Ok(None);
+        };
+        let library = libloading::Library::new(&path)
+            .map_err(|error| format!("could not load {}: {error}", path.display()))?;
+        let load = *library
+            .get::<BridgeLoad>(b"benilla_nvngx_load\0")
+            .map_err(|error| format!("{BRIDGE_DLL} export missing: {error}"))?;
+        let init = *library
+            .get::<BridgeInit>(b"benilla_nvngx_init_ext2\0")
+            .map_err(|error| format!("{BRIDGE_DLL} export missing: {error}"))?;
+        let create = *library
+            .get::<BridgeCreate>(b"benilla_nvngx_create_feature\0")
+            .map_err(|error| format!("{BRIDGE_DLL} export missing: {error}"))?;
+        let evaluate = *library
+            .get::<BridgeEvaluate>(b"benilla_nvngx_evaluate_feature\0")
+            .map_err(|error| format!("{BRIDGE_DLL} export missing: {error}"))?;
+        let release = *library
+            .get::<BridgeRelease>(b"benilla_nvngx_release_feature\0")
+            .map_err(|error| format!("{BRIDGE_DLL} export missing: {error}"))?;
+        Ok(Some(Self {
+            _library: library,
+            load,
+            init,
+            create,
+            evaluate,
+            release,
+        }))
+    }
+
+    fn locate(data_dir: &Path) -> Result<Option<std::path::PathBuf>, String> {
+        #[cfg(feature = "ngx")]
+        {
+            let path = data_dir.join(BRIDGE_DLL);
+            if std::fs::read(&path).ok().as_deref() != Some(BRIDGE_BYTES) {
+                std::fs::write(&path, BRIDGE_BYTES)
+                    .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+            }
+            Ok(Some(path))
+        }
+        #[cfg(not(feature = "ngx"))]
+        {
+            let _ = data_dir;
+            Ok(None)
+        }
+    }
+}
+
 #[repr(C)]
 pub(crate) struct ResourceVk {
     view: u64,
@@ -127,6 +229,7 @@ pub struct DeviceHandles {
 pub struct NgxCore {
     parameters: *mut c_void,
     _runtime: libloading::Library,
+    bridge: Option<Bridge>,
     create_feature: CreateFeature,
     release_feature: ReleaseFeature,
     evaluate_feature: EvaluateFeature,
@@ -155,6 +258,7 @@ impl NgxCore {
                 data_dir.display()
             )
         })?;
+        let bridge = Bridge::open(data_dir)?;
         let data_dir: Vec<u16> = data_dir
             .as_os_str()
             .to_string_lossy()
@@ -187,6 +291,19 @@ impl NgxCore {
             ));
         }
 
+        // With the bridge, the snippet's first load (its `DllMain`) is made from the bridge too;
+        // `libloading` below then only takes a reference to the already-loaded module.
+        if let Some(bridge) = &bridge {
+            let wide: Vec<u16> = runtime
+                .as_os_str()
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            if (bridge.load)(wide.as_ptr()).is_null() {
+                return Err(format!("{BRIDGE_DLL} could not load {}", runtime.display()));
+            }
+        }
         let library = libloading::Library::new(runtime)
             .map_err(|error| format!("could not load {}: {error}", runtime.display()))?;
         let init: libloading::Symbol<InitExt2> = library
@@ -203,26 +320,55 @@ impl NgxCore {
             .map_err(|error| format!("DLSSNR EvaluateFeature export missing: {error}"))?;
         let (init, create_feature, release_feature, evaluate_feature) =
             (*init, *create_feature, *release_feature, *evaluate_feature);
-        let result = init(
-            0x1122_3344_5566_7788,
-            data_dir.as_ptr(),
-            handles.instance,
-            handles.physical_device,
-            handles.device,
-            handles.get_instance_proc_addr,
-            handles.get_device_proc_addr,
-            NGX_VERSION_API,
-            parameters,
-        );
+        let result = match &bridge {
+            Some(bridge) => (bridge.init)(
+                init,
+                0x1122_3344_5566_7788,
+                data_dir.as_ptr(),
+                handles.instance,
+                handles.physical_device,
+                handles.device,
+                handles.get_instance_proc_addr,
+                handles.get_device_proc_addr,
+                NGX_VERSION_API,
+                parameters,
+            ),
+            None => init(
+                0x1122_3344_5566_7788,
+                data_dir.as_ptr(),
+                handles.instance,
+                handles.physical_device,
+                handles.device,
+                handles.get_instance_proc_addr,
+                handles.get_device_proc_addr,
+                NGX_VERSION_API,
+                parameters,
+            ),
+        };
         if result != NGX_SUCCESS {
-            return Err(format!(
-                "DLSSNR snippet initialization failed (0x{result:08X}); launch the main executable as nvngx.dll"
-            ));
+            return Err(if bridge.is_some() {
+                format!(
+                    "DLSSNR snippet initialization failed (0x{result:08X}) through {BRIDGE_DLL}"
+                )
+            } else {
+                format!(
+                    "DLSSNR snippet initialization failed (0x{result:08X}); build with --features dlss for {BRIDGE_DLL}"
+                )
+            });
         }
+        info!(
+            "dlssnr: snippet initialized {}",
+            if bridge.is_some() {
+                "through benilla_nvngx.dll"
+            } else {
+                "directly"
+            }
+        );
 
         Ok(Self {
             parameters,
             _runtime: library,
+            bridge,
             create_feature,
             release_feature,
             evaluate_feature,
@@ -257,13 +403,23 @@ impl NgxCore {
         NVSDK_NGX_Parameter_SetI(self.parameters, preset.as_ptr(), 0);
 
         let mut feature = ptr::null_mut();
-        let result = (self.create_feature)(
-            device,
-            command_buffer,
-            FEATURE_DLSSNR,
-            self.parameters,
-            &mut feature,
-        );
+        let result = match &self.bridge {
+            Some(bridge) => (bridge.create)(
+                self.create_feature,
+                device,
+                command_buffer,
+                FEATURE_DLSSNR,
+                self.parameters,
+                &mut feature,
+            ),
+            None => (self.create_feature)(
+                device,
+                command_buffer,
+                FEATURE_DLSSNR,
+                self.parameters,
+                &mut feature,
+            ),
+        };
         if result == NGX_SUCCESS && !feature.is_null() {
             Ok(feature)
         } else {
@@ -274,7 +430,10 @@ impl NgxCore {
     /// # Safety
     /// `feature` must have been created by this runtime after GPU work using it has completed.
     pub unsafe fn release_feature(&self, feature: *mut c_void) {
-        let _ = (self.release_feature)(feature);
+        let _ = match &self.bridge {
+            Some(bridge) => (bridge.release)(self.release_feature, feature),
+            None => (self.release_feature)(feature),
+        };
     }
 
     /// # Safety
@@ -334,7 +493,16 @@ impl NgxCore {
         set_f32("DLSSNR.GlobalTone", 0.0);
         set_f32("DLSSNR.LocalTone", 0.0);
         set_f32("DLSSNR.LocalStructure", 1.6);
-        let result = (self.evaluate_feature)(command_buffer, feature, self.parameters, ptr::null());
+        let result = match &self.bridge {
+            Some(bridge) => (bridge.evaluate)(
+                self.evaluate_feature,
+                command_buffer,
+                feature,
+                self.parameters,
+                ptr::null(),
+            ),
+            None => (self.evaluate_feature)(command_buffer, feature, self.parameters, ptr::null()),
+        };
         (result == NGX_SUCCESS).then_some(()).ok_or(result)
     }
 }

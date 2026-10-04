@@ -29,4 +29,28 @@ fn main() {
     for lib in ["advapi32", "user32", "shell32", "ole32", "delayimp"] {
         println!("cargo::rustc-link-lib={lib}");
     }
+
+    build_bridge();
+}
+
+/// Compiles `benilla-nvngx`'s one dependency-free source into `OUT_DIR/benilla_nvngx.dll`, which
+/// `ngx.rs` embeds: a cdylib cannot be a cargo dependency, and its file name is load-bearing.
+fn build_bridge() {
+    let manifest = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let source = manifest.join("../benilla-nvngx/src/lib.rs");
+    println!("cargo::rerun-if-changed={}", source.display());
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let target = std::env::var("TARGET").unwrap();
+    let status = std::process::Command::new(rustc)
+        .args(["--edition", "2021", "--crate-type", "cdylib"])
+        .args(["--crate-name", "benilla_nvngx", "--target", &target])
+        .args(["-C", "opt-level=2", "--out-dir"])
+        .arg(&out)
+        .arg(&source)
+        .status()
+        .expect("could not run rustc for benilla_nvngx.dll");
+    if !status.success() {
+        panic!("rustc failed to build benilla_nvngx.dll ({status})");
+    }
 }

@@ -628,6 +628,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "benilla-nvngx"
+version = "0.2.0"
+
+[[package]]
 name = "benilla-protocol"
 version = "0.2.0"
 dependencies = [
