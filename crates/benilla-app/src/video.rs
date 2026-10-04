@@ -189,12 +189,9 @@ pub(crate) struct VideoConfig {
     /// AND to the retained `static_gx` pipeline's shader def, which is specialized by hand and
     /// would otherwise keep whichever branch was compiled in.
     pub(crate) shadow_filter: u32,
-    /// MONKEY (sun shadow perf): Hz cap on the CHARACTER lane's proxy re-skin
-    /// (`characterShadowRate`, 0..120, default 30; `0` = every frame, the pre-cvar behaviour). The
-    /// lane CPU-skins every admitted unit and mutates a `Mesh` asset, which costs a full
-    /// vertex+index re-upload — the character lane's ~3 ms. The shadow MAP is still rendered every
-    /// frame from the last proxy, so a capped rate does not flicker; it only lets a running NPC's
-    /// silhouette lag by up to 1/rate s.
+    /// MONKEY (sun shadow perf): `characterShadowRate`, 0..120, default 30. No longer read: the
+    /// character lane skins its proxies on the GPU every frame, so there is no CPU re-skin left to
+    /// cap. Kept parsed and persisted until it is retired.
     pub(crate) character_shadow_rate: u32,
     /// MONKEY (sun shadow perf): the same cap for the WORLD lane's per-frame ENTITY caster
     /// (`worldShadowRate`, 0..120, default 30) — gameobjects, distance-faded doodads, WMO props.

@@ -23,7 +23,10 @@
 //!
 //! The rig deliberately does NOT put a directional light on the normal world layer: that would make
 //! every existing WoW material enter Bevy's shadow-prepass path, the source of the pipeline
-//! corruption seen during the first experiment. Only the private-layer proxy casts.
+//! corruption seen during the first experiment. Bevy runs a material's `specialize` on the prepass
+//! descriptor too, and `WowModelExt::specialize` rewrites the vertex layout to forward-pass
+//! locations (normal at 1, joints at 10/11) that Bevy's prepass shader does not read (UV at 1).
+//! Only the private-layer proxies cast, each with a material that owns both of its layouts.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
@@ -86,9 +89,10 @@ pub(crate) const STATIC_REBUILD_STEP: f32 = 16.0;
 // biggest line item. The cost splits three ways and each dial takes one of them:
 //   * the shadow PASS's fill + its depth texture .... `shadowMapSize` (quadratic in the edge)
 //   * the RECEIVERS' PCF fetches ..................... `shadowFilter`  (9 samples vs 1)
-//   * the CPU caster rebuild + GPU re-upload ......... `characterShadowRate` / `worldShadowRate`
-// and `shadowCasterReach` trims the caster POPULATION those rebuilds walk. All live: nothing here
-// is latched at boot, so the user A/Bs the whole set from one chat line.
+//   * the world lane's CPU caster rebuild + re-upload  `worldShadowRate`
+// and `shadowCasterReach` trims the caster POPULATION those rebuilds walk. (The character lane
+// has no rebuild: its proxies skin on the GPU, so `characterShadowRate` no longer prices it.)
+// All live: nothing here is latched at boot, so the user A/Bs the whole set from one chat line.
 // -------------------------------------------------------------------------------------------
 
 /// The `shadowMapSize` ladder. Powers of two only — Bevy's `validate_shadow_map_size` rounds a
@@ -836,7 +840,7 @@ pub(crate) fn collect_entity_geometry(
 /// ENVIRONMENT (gameobjects, faded doodads, WMO props) is OPAQUE only — a foliage leaf-card cast
 /// solid becomes a box; retained-world cutout is cast leaf-shaped by the world lane's alpha-tested
 /// material instead. Additive/transparent geometry never casts a solid shadow.
-fn casts_realtime_shadow(
+pub(crate) fn casts_realtime_shadow(
     kind: ModelKind,
     blend: ModelBlend,
     want_creatures: bool,

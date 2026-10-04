@@ -14,6 +14,8 @@ pub(crate) fn plugin(app: &mut App) {
     bevy::asset::embedded_asset!(app, "shaders/ui_slice_gamma.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/shadow_caster.wgsl");
     bevy::asset::embedded_asset!(app, "shaders/shadow_caster_cutout_prepass.wgsl");
+    bevy::asset::embedded_asset!(app, "shaders/shadow_caster_skinned.wgsl");
+    bevy::asset::embedded_asset!(app, "shaders/shadow_caster_skinned_prepass.wgsl");
     // MONKEY (ao): the contact-shadow pass.
     bevy::asset::embedded_asset!(app, "shaders/ssao.wgsl");
 }
@@ -50,6 +52,6 @@ mod tests {
                  `shaders::plugin`, or was registered from a file that is not directly under src/"
             );
         }
-        assert_eq!(found, 8, "the game's shader set changed size");
+        assert_eq!(found, 10, "the game's shader set changed size");
     }
 }

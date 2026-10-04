@@ -656,7 +656,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ours(
         "characterShadowRate",
         "30",
-        "benilla's own: Hz cap on the character shadow proxy re-skin+upload, 0..120 (0 = per frame)",
+        "benilla's own: no effect (character shadows skin on the GPU every frame); kept until retired",
     ),
     ours(
         "worldShadowRate",

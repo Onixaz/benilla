@@ -27,12 +27,12 @@ pub(crate) const MAX_PALETTE_BONES: usize = 131_072;
 const BONE_BYTES: u64 = 48;
 
 /// Byte offset of the rig slot table (a base bone index a slot), after the prop-probe region.
-pub(crate) fn rig_table_region_offset() -> u64 {
+pub fn rig_table_region_offset() -> u64 {
     crate::lighting::prop_probe_region_offset() + (7 * crate::lighting::MAX_PROP_PROBES * 16) as u64
 }
 
 /// Byte offset of the rig origin table (a `vec4` a slot), after the tint table, as in the shader.
-pub(crate) fn rig_origin_region_offset() -> u64 {
+pub fn rig_origin_region_offset() -> u64 {
     crate::instance_tint::region_offset() + crate::instance_tint::region_bytes()
 }
 
@@ -43,7 +43,7 @@ pub(crate) fn rig_origin_region_bytes() -> u64 {
 
 /// Byte offset of the palette rows, after the slot, tint, origin, mat-anim and straddle-clip
 /// tables: last, because `wow_model.wgsl` declares them as the struct's one runtime-sized array.
-pub(crate) fn palette_region_offset() -> u64 {
+pub fn palette_region_offset() -> u64 {
     crate::straddle::region_offset() + crate::straddle::region_bytes()
 }
 
