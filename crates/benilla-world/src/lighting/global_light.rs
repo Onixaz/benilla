@@ -318,24 +318,103 @@ pub const CLAIM_EXT_OK: u32 = 1 << 16;
 /// `static_gx.wgsl`.**
 pub const CLAIM_ENTRY_SHIFT: u32 = 17;
 
+/// MONKEY (room light lists): the ROOM INDEX that follows the per-light claim records in the same
+/// buffer, so a fragment visits only the fixtures that can light its room instead of the whole
+/// point table. Three regions, every list ascending by light index:
+/// - a hash table of [`ROOM_INDEX_SLOTS`] 4-word slots `[instance, group key, list offset, count]`
+///   keyed by [`room_index_hash`] with linear probing; `instance 0` is an empty slot (a gated claim
+///   never carries instance 0, see `RoomClaim::build`);
+/// - the UNCLAIMED list `[count, i...]`: the interior fixtures with claim count 0, which light every
+///   room on the fail-open lane;
+/// - the claimant lists the hash slots point into.
+///
+/// A fragment's candidates are its room's list merged with the unclaimed list, which is exactly the
+/// set `interior_room_admits` can weight above zero for a fragment that has a room key. **The layout
+/// constants must equal their twins in `static_gx.wgsl`.**
+pub const ROOM_INDEX_SLOTS: usize = 2048;
+/// MONKEY (room light lists): the first word of the hash table.
+pub const ROOM_INDEX_BASE: usize = ROOM_CLAIM_STRIDE * MAX_POINT_LIGHTS;
+/// MONKEY (room light lists): the unclaimed list's count word; its entries follow.
+pub const ROOM_UNCLAIMED_BASE: usize = ROOM_INDEX_BASE + 4 * ROOM_INDEX_SLOTS;
+/// MONKEY (room light lists): the claimant lists. At most one entry per claim slot of every light.
+pub const ROOM_LIST_BASE: usize = ROOM_UNCLAIMED_BASE + 1 + MAX_POINT_LIGHTS;
+/// MONKEY (room light lists): the whole table's words — the claim records plus the room index.
+pub const ROOM_TABLE_WORDS: usize = ROOM_LIST_BASE + ROOM_CLAIM_MAX * MAX_POINT_LIGHTS;
+
+/// MONKEY (room light lists): the room index's hash of a room key, `group_key` in the claim word's
+/// `group + 1` form. **Must equal `room_index_hash` in `static_gx.wgsl`** (wrapping u32 arithmetic).
+pub fn room_index_hash(instance: u32, group_key: u32) -> usize {
+    let mut h = instance.wrapping_mul(0x9E37_79B1) ^ group_key.wrapping_mul(0x85EB_CA77);
+    h ^= h >> 15;
+    h as usize & (ROOM_INDEX_SLOTS - 1)
+}
+
+/// MONKEY (room light lists): rebuild the room index over the first `count` claim records of
+/// `words`. `interior(i)` is the shader's own lane test on light `i` (its colour-row `.w > 0.5`):
+/// an exterior light never enters the room loop, so it enters no list.
+pub fn build_room_index(words: &mut [u32], count: usize, interior: impl Fn(usize) -> bool) {
+    words[ROOM_INDEX_BASE..ROOM_TABLE_WORDS].fill(0);
+    let mut unclaimed = 0usize;
+    // (instance, group key, light): sorted, each room's run is contiguous and ascending by light.
+    let mut claims: Vec<(u32, u32, u32)> = Vec::new();
+    for i in 0..count.min(MAX_POINT_LIGHTS) {
+        if !interior(i) {
+            continue;
+        }
+        let record = &words[i * ROOM_CLAIM_STRIDE..][..ROOM_CLAIM_STRIDE];
+        let (instance, n) = (record[0], record[1] as usize);
+        if n == 0 {
+            words[ROOM_UNCLAIMED_BASE + 1 + unclaimed] = i as u32;
+            unclaimed += 1;
+            continue;
+        }
+        let start = claims.len();
+        for &claim in &record[2..2 + n.min(ROOM_CLAIM_MAX)] {
+            let key = claim & 0xffff;
+            // One entry a room per light: two claim words can name one group (the CPU id's
+            // exterior-deny bit is not part of the key), and the shader takes the first match.
+            if key != 0 && !claims[start..].iter().any(|&(_, k, _)| k == key) {
+                claims.push((instance, key, i as u32));
+            }
+        }
+    }
+    words[ROOM_UNCLAIMED_BASE] = unclaimed as u32;
+    claims.sort_unstable();
+    let mut offset = 0usize;
+    for run in claims.chunk_by(|a, b| (a.0, a.1) == (b.0, b.1)) {
+        let (instance, key, _) = run[0];
+        let mut slot = room_index_hash(instance, key);
+        // At most `ROOM_CLAIM_MAX * MAX_POINT_LIGHTS` rooms against 2048 slots: never full.
+        while words[ROOM_INDEX_BASE + 4 * slot] != 0 {
+            slot = (slot + 1) & (ROOM_INDEX_SLOTS - 1);
+        }
+        let entry = &mut words[ROOM_INDEX_BASE + 4 * slot..][..4];
+        entry.copy_from_slice(&[instance, key, offset as u32, run.len() as u32]);
+        for (k, &(_, _, light)) in run.iter().enumerate() {
+            words[ROOM_LIST_BASE + offset + k] = light;
+        }
+        offset += run.len();
+    }
+}
+
 /// MONKEY (room gate): this frame's claim table, index-parallel with [`WowLightData`]'s point
 /// entries. Its own resource and its own GPU buffer on purpose: [`LightStd430`] is mirrored by
 /// three shaders plus the portrait booth and must never be resized, and only `static_gx` reads
 /// this. `static_gx::render` owns the buffer and the binding.
 #[derive(Resource, Clone, ExtractResource)]
-pub struct RoomClaimTable(pub Box<[u32; ROOM_CLAIM_STRIDE * MAX_POINT_LIGHTS]>);
+pub struct RoomClaimTable(pub Box<[u32; ROOM_TABLE_WORDS]>);
 
 /// MONKEY (room gate): the claim table's byte size — the one place `static_gx::render` sizes its
 /// GPU buffer from, so the table cannot grow here and leave the binding short (a bound storage
 /// buffer smaller than the shader's runtime-sized array fails validation at draw time, which
 /// vanishes every building).
 pub fn room_claim_bytes() -> u64 {
-    (ROOM_CLAIM_STRIDE * MAX_POINT_LIGHTS * std::mem::size_of::<u32>()) as u64
+    (ROOM_TABLE_WORDS * std::mem::size_of::<u32>()) as u64
 }
 
 impl Default for RoomClaimTable {
     fn default() -> Self {
-        Self(Box::new([0; ROOM_CLAIM_STRIDE * MAX_POINT_LIGHTS]))
+        Self(Box::new([0; ROOM_TABLE_WORDS]))
     }
 }
 
@@ -1670,9 +1749,11 @@ fn build_light_data(
     // Entries past the count are stale in the point table by design (the count row guards every
     // reader) — but the claim table is read at the SAME index, so a stale head there would gate a
     // live light with a dead building's identity. Clear the tail instead of trusting the count.
-    for slot in claims.0[pts.len() * ROOM_CLAIM_STRIDE..].iter_mut() {
+    for slot in claims.0[pts.len() * ROOM_CLAIM_STRIDE..ROOM_INDEX_BASE].iter_mut() {
         *slot = 0;
     }
+    // MONKEY (room light lists): the index over the records just written.
+    build_room_index(&mut claims.0[..], pts.len(), |i| pts[i].5 > 0.5);
     // `WOW_POINTS_DUMP=1` prints the nearest 8 packed lights once a second; `=frame` every frame,
     // which a pool that changes frame to frame needs.
     static POINTS_DUMP: std::sync::OnceLock<Option<std::ffi::OsString>> =
@@ -1922,6 +2003,164 @@ fn upload_light(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MONKEY (room light lists): the shader's `room_index_find`, mirrored, over a built table.
+    fn find_room(words: &[u32], instance: u32, key: u32) -> (usize, usize) {
+        let mut slot = room_index_hash(instance, key);
+        for _ in 0..ROOM_INDEX_SLOTS {
+            let e = &words[ROOM_INDEX_BASE + 4 * slot..][..4];
+            if e[0] == 0 {
+                break;
+            }
+            if e[0] == instance && e[1] == key {
+                return (e[2] as usize, e[3] as usize);
+            }
+            slot = (slot + 1) & (ROOM_INDEX_SLOTS - 1);
+        }
+        (0, 0)
+    }
+
+    /// MONKEY (room light lists): the shader's merge walk, mirrored — the lights a fragment with
+    /// room key `(instance, key)` visits, in the order it visits them.
+    fn walk_room(words: &[u32], instance: u32, key: u32, strict: bool) -> Vec<u32> {
+        let (offset, n) = find_room(words, instance, key);
+        let room = &words[ROOM_LIST_BASE + offset..][..n];
+        let open_n = if strict {
+            0
+        } else {
+            words[ROOM_UNCLAIMED_BASE] as usize
+        };
+        let open = &words[ROOM_UNCLAIMED_BASE + 1..][..open_n];
+        let (mut a, mut b, mut out) = (0, 0, Vec::new());
+        while a < room.len() || b < open.len() {
+            let ra = room.get(a).copied().unwrap_or(u32::MAX);
+            let ob = open.get(b).copied().unwrap_or(u32::MAX);
+            if ra < ob {
+                out.push(ra);
+                a += 1;
+            } else {
+                out.push(ob);
+                b += 1;
+            }
+        }
+        out
+    }
+
+    /// MONKEY (room light lists): what the full loop can give a non-zero weight — the shader's
+    /// lane test plus `interior_room_admits`' arms for a fragment WITH a room key, before the
+    /// per-claim fade (which only ever lowers an admitted weight).
+    fn admissible(
+        words: &[u32],
+        interior: &[bool],
+        i: usize,
+        instance: u32,
+        key: u32,
+        strict: bool,
+    ) -> bool {
+        let r = &words[i * ROOM_CLAIM_STRIDE..][..ROOM_CLAIM_STRIDE];
+        if !interior[i] {
+            return false;
+        }
+        if r[1] == 0 {
+            return !strict;
+        }
+        if r[0] != instance {
+            return false;
+        }
+        r[2..2 + (r[1] as usize).min(ROOM_CLAIM_MAX)]
+            .iter()
+            .any(|c| c & 0xffff == key && (!strict || c & CLAIM_EXT_OK != 0))
+    }
+
+    /// The room index is an exact pre-filter of the full loop: for every room key a fragment can
+    /// carry, it visits every fixture the loop could admit, in ascending order (the order the full
+    /// loop sums in), exactly once. A miss would black out a fixture's pool in one room; an order
+    /// change would move the summed light by rounding; a duplicate would double a pool.
+    #[test]
+    fn the_room_index_visits_every_admissible_fixture_in_table_order() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |m: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % u64::from(m)) as u32
+        };
+        for round in 0..40 {
+            let mut words = vec![0u32; ROOM_TABLE_WORDS];
+            let count = if round == 0 {
+                MAX_POINT_LIGHTS
+            } else {
+                1 + next(MAX_POINT_LIGHTS as u32) as usize
+            };
+            let mut interior = vec![false; MAX_POINT_LIGHTS];
+            for i in 0..count {
+                interior[i] = next(5) != 0;
+                let r = &mut words[i * ROOM_CLAIM_STRIDE..][..ROOM_CLAIM_STRIDE];
+                if next(4) == 0 {
+                    continue; // unclaimed: count 0
+                }
+                r[0] = 1 + next(3); // three buildings, so instances collide across lights
+                let n = 1 + next(ROOM_CLAIM_MAX as u32) as usize;
+                r[1] = n as u32;
+                for k in 0..n {
+                    // Few groups, so rooms share fixtures; the EXT bit and entry byte vary.
+                    let key = 1 + next(8);
+                    r[2 + k] = key
+                        | if next(2) == 0 { CLAIM_EXT_OK } else { 0 }
+                        | next(256) << CLAIM_ENTRY_SHIFT;
+                }
+            }
+            build_room_index(&mut words, count, |i| interior[i]);
+            for instance in 0..=4u32 {
+                for key in 1..=10u32 {
+                    for strict in [false, true] {
+                        let visited = walk_room(&words, instance, key, strict);
+                        assert!(
+                            visited.windows(2).all(|w| w[0] < w[1]),
+                            "ascending, no repeats"
+                        );
+                        assert!(visited
+                            .iter()
+                            .all(|&i| (i as usize) < count && interior[i as usize]));
+                        for i in 0..count {
+                            if admissible(&words, &interior, i, instance, key, strict) {
+                                assert!(
+                                    visited.contains(&(i as u32)),
+                                    "round {round}: room ({instance}, {key}) strict {strict} misses light {i}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The room index's layout and hash are declared twice; `static_gx.wgsl` must read the table
+    /// the packer writes.
+    #[test]
+    fn the_room_index_layout_matches_the_shader() {
+        let src = include_str!("../shaders/static_gx.wgsl");
+        for (name, value) in [
+            ("ROOM_INDEX_SLOTS", ROOM_INDEX_SLOTS),
+            ("ROOM_INDEX_BASE", ROOM_INDEX_BASE),
+            ("ROOM_UNCLAIMED_BASE", ROOM_UNCLAIMED_BASE),
+            ("ROOM_LIST_BASE", ROOM_LIST_BASE),
+        ] {
+            let decl = format!("const {name}: u32 = {value}u;");
+            assert!(src.contains(&decl), "static_gx.wgsl lacks `{decl}`");
+        }
+        for line in [
+            "var h = (room_inst * 0x9E3779B1u) ^ (room_group * 0x85EBCA77u);",
+            "h = h ^ (h >> 15u);",
+        ] {
+            assert!(
+                src.contains(line),
+                "static_gx.wgsl's room_index_hash drifted: `{line}`"
+            );
+        }
+        assert_eq!(room_claim_bytes(), (ROOM_TABLE_WORDS * 4) as u64);
+    }
 
     // MONKEY (review fixes): a reference cannot override resolved terrain or an outdoor WMO
     // face. An empty ray still preserves the old rule until residency supplies real evidence.

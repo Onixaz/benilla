@@ -977,6 +977,35 @@ const CLAIM_EXT_OK: u32 = 65536u;
 // sync with `benilla_world::lighting::CLAIM_ENTRY_SHIFT`.
 const CLAIM_ENTRY_SHIFT: u32 = 17u;
 const CLAIM_GROUP_MASK: u32 = 0xffffu;
+// MONKEY (room light lists): the room index after the claim records — keep in sync with
+// `benilla_world::lighting::{ROOM_INDEX_SLOTS, ROOM_INDEX_BASE, ROOM_UNCLAIMED_BASE,
+// ROOM_LIST_BASE}` and `room_index_hash`. A disagreement hands a room another room's fixtures.
+const ROOM_INDEX_SLOTS: u32 = 2048u;
+const ROOM_INDEX_BASE: u32 = 8192u;
+const ROOM_UNCLAIMED_BASE: u32 = 16384u;
+const ROOM_LIST_BASE: u32 = 16641u;
+fn room_index_hash(room_inst: u32, room_group: u32) -> u32 {
+    var h = (room_inst * 0x9E3779B1u) ^ (room_group * 0x85EBCA77u);
+    h = h ^ (h >> 15u);
+    return h & (ROOM_INDEX_SLOTS - 1u);
+}
+// This room's claimant list as `(offset, count)` into the lists region; `(0, 0)` when no fixture
+// claims it. Linear probing ends at the first empty slot (instance 0).
+fn room_index_find(room_inst: u32, room_group: u32) -> vec2<u32> {
+    var slot = room_index_hash(room_inst, room_group);
+    for (var probe = 0u; probe < ROOM_INDEX_SLOTS; probe = probe + 1u) {
+        let base = ROOM_INDEX_BASE + 4u * slot;
+        let inst = room_claims[base];
+        if (inst == 0u) {
+            break;
+        }
+        if (inst == room_inst && room_claims[base + 1u] == room_group) {
+            return vec2<u32>(room_claims[base + 2u], room_claims[base + 3u]);
+        }
+        slot = (slot + 1u) & (ROOM_INDEX_SLOTS - 1u);
+    }
+    return vec2<u32>(0u, 0u);
+}
 // MONKEY (room gate): may fixture `i` light a surface of room `(room_inst, room_group)`? Three
 // fail-OPEN arms, deliberately, because a wrong "no" is a black room while a wrong "yes" is only
 // the leak we already had: a fragment with no room key (`room_group == 0`), a fixture that claims
@@ -1065,6 +1094,109 @@ fn gx_room_group(word: u32) -> u32 {
 // predicate to `true` — it has neither the claim binding nor a per-fragment room key, which is
 // also why it needs no `strict` (MONKEY, portal claims: only this file has an exterior WMO lane).
 // **The PROFILE block above stays byte-identical between the two files; the signature does not.**
+// MONKEY (room light lists): one fixture's direct + fill into the room budget — the body of
+// `interior_room_light`'s loop, unchanged, so both of its walks below run the same arithmetic.
+fn interior_room_fixture(
+    i: u32,
+    P: vec3<f32>,
+    N: vec3<f32>,
+    room_inst: u32,
+    room_group: u32,
+    strict: bool,
+    k_fill: f32,
+    direct: ptr<function, vec3<f32>>,
+    fill: ptr<function, vec3<f32>>,
+) {
+    let color_lane = wow_light.points[2u * i + 1u];
+    // MONKEY (light lanes): only a fixture that CLAIMS a room lights this room (keep in sync
+    // with wow_model.wgsl). `.w` is 0 on every exterior source, so a campfire burning just
+    // outside the door stops reaching the floor inside it — the leak's other direction.
+    if (color_lane.w < 0.5) {
+        return;
+    }
+    // MONKEY (room gate): and only a fixture that claims THIS ROOM lights this room's surfaces.
+    // Before this, the whole INT half of the table lit every interior fragment of every
+    // building in range and the only occlusion was the <=6 promoted cube-shadow casters — so an
+    // inn's ground-floor candles lit its basement THROUGH the floor, and an upstairs corridor
+    // wall glowed from the fixture in the room behind it. Tested here, before the distance
+    // test, because it is the term that throws away the most: a room claims one or two of the
+    // table's fixtures, not all of them.
+    // MONKEY (soft portal claims): `w` is the claim's WEIGHT, and it multiplies BOTH terms
+    // below. `wow_model.wgsl`'s copy of this loop keeps the old boolean stub (entities are
+    // ungated — it has neither the claim binding nor a per-fragment room key), which is the
+    // one place the two files' loop bodies deliberately differ; the PROFILE constants above
+    // stay byte-identical.
+    let w = interior_room_admits(i, room_inst, room_group, strict, P);
+    if (w <= 0.0) {
+        return;
+    }
+    // MONKEY (soft falloff): `.w` is ALSO this fixture's EFFECTIVE RADIUS `R` in yards — the
+    // authored MOLT `attenuation_end` (or the M2 intensity bucket) already multiplied by the
+    // live `interiorAttenScale` at pack time. It replaces the flat 48 yd candidacy radius in
+    // `pos_range.w` on this lane, which is why the inn's 10 candles read as one uniform wash
+    // while the smithy's 3 forges read fine.
+    let reach_yd = color_lane.w;
+    // Candidacy is the FILL radius, not R: the wash reaches further than the direct pool (see
+    // the profile block), and rejecting at R would cut it off exactly at the pool's own edge —
+    // putting the rim back one term down.
+    let fill_yd = INTERIOR_FILL_SPAN * reach_yd;
+    let pos_range = wow_light.points[2u * i];
+    let to_light = pos_range.xyz - P;
+    let d2 = dot(to_light, to_light);
+    if (d2 > fill_yd * fill_yd) {
+        return;
+    }
+    let d = sqrt(d2);
+    let c = color_lane.rgb;
+    // MONKEY (soft falloff): inverse square with the authored-start soft core, normalised so
+    // the 1 yd value is the retired hyperbolic's (profile block above).
+    // MONKEY (pool energy): a CONSTANT core radius in yards (profile block above) — the reach
+    // no longer scales the pool's brightness, only its window. `max` keeps the divide honest
+    // if the constant is ever tuned toward 0.
+    let r0 = max(INTERIOR_CORE_YD, 1e-3);
+    let atten = INTERIOR_CORE_GAIN / (1.0 + (d / r0) * (d / r0));
+    let window = interior_window(d, reach_yd, INTERIOR_DIRECT_POW);
+    let nl = max(
+        (dot(N, to_light / max(d, 1e-4)) + INTERIOR_WRAP) / (1.0 + INTERIOR_WRAP),
+        0.0,
+    );
+    // Normalised for BOTH terms: the table commits RAW over-gamut colour × intensity, and the
+    // smithy's three forges (1.4, 0.87, 0.4) drove the direct term to a washed-out white while
+    // the inn's unit candles sat where they should. The hue is what survives.
+    let c_norm = c / max(1.0, max(c.r, max(c.g, c.b)));
+    // Phase 1: this fixture's OWN cast shadow, sampled from its down-looking depth map
+    // (`torch_surface_shadow` correlates the fixture to its promoted map by position; 1.0 when
+    // it was not promoted). Per-fixture, so a pillar between the fragment and torch A darkens A's
+    // term without touching torch B's — the occlusion that makes an interior read
+    // lit-and-shadowed instead of flat. (`static_gx.wgsl` only; the wow_model copy of this
+    // function keeps the 1.0 `torch_shadow_for` stub — it has no group 3.)
+    // MONKEY (torch lane perf): the shadow sample is MULTIPLIED into the direct term, so
+    // where that term is already nothing the table scan and its four comparison taps buy
+    // nothing. And it very often is: `window` is exactly 0 past the fixture's reach, `nl` is 0
+    // on a surface facing away even under the wrap, and `w` is the claim weight a portal fade
+    // has taken to 0. The scan is by POSITION over up to sixteen slots, so this is the
+    // difference between "every interior fixture in range pays a scan on every fragment it
+    // touches" and "only the ones actually lighting it do". A branch rather than a `select`
+    // deliberately: the whole point is to NOT execute the taps.
+    let direct_w = atten * nl * window;
+    var s = 1.0;
+    if (direct_w * w > TORCH_SKIP_EPS) {
+        s = torch_surface_shadow(pos_range.xyz, P, N);
+    }
+    *direct += c_norm * direct_w * s * w;
+    // MONKEY (soft falloff): the fill's profile is UNCHANGED in FORM — `(1 − d/r)²`, which is
+    // exactly `interior_window(d, r, 1.0)` — and only its radius moved, from R to
+    // `INTERIOR_FILL_SPAN·R`. That is the whole "gentle wash between the pools": at the fixture
+    // it is still 1 (so `interiorFill` keeps its tuned meaning) and it decays to 0 at 2R with a
+    // vanishing derivative, so the floor half-way between two candles is dim, not black.
+    let c_fill = mix(c_norm, vec3<f32>(dot(c_norm, vec3<f32>(0.299, 0.587, 0.114))), 0.5);
+    // The DOMINANT fixture's fill, not the SUM: an ambient room glow must not scale with the
+    // candle count, or a dense room (the inn's ~10 fixtures vs the smithy's 3) piles fill up
+    // until the rolloff saturates every surface to a flat white. `max` keeps the nearest/
+    // brightest fixture's glow and leaves the direct term to carry the per-fixture relief.
+    *fill = max(*fill, c_fill * (k_fill * interior_window(d, fill_yd, INTERIOR_FILL_POW) * w));
+}
+
 fn interior_room_light(
     P: vec3<f32>,
     N: vec3<f32>,
@@ -1076,95 +1208,47 @@ fn interior_room_light(
     let k_fill = wow_light.point_count.z;
     var direct = vec3<f32>(0.0);
     var fill = vec3<f32>(0.0);
-    for (var i = 0u; i < count; i = i + 1u) {
-        let color_lane = wow_light.points[2u * i + 1u];
-        // MONKEY (light lanes): only a fixture that CLAIMS a room lights this room (keep in sync
-        // with wow_model.wgsl). `.w` is 0 on every exterior source, so a campfire burning just
-        // outside the door stops reaching the floor inside it — the leak's other direction.
-        if (color_lane.w < 0.5) {
-            continue;
+    if (room_group == 0u) {
+        // No room key: every fixture is a candidate (`interior_room_admits`' first arm) — or, for a
+        // strict caller, none is, and the walk would only collect zeros.
+        if (!strict) {
+            for (var i = 0u; i < count; i = i + 1u) {
+                interior_room_fixture(i, P, N, room_inst, room_group, strict, k_fill, &direct, &fill);
+            }
         }
-        // MONKEY (room gate): and only a fixture that claims THIS ROOM lights this room's surfaces.
-        // Before this, the whole INT half of the table lit every interior fragment of every
-        // building in range and the only occlusion was the <=6 promoted cube-shadow casters — so an
-        // inn's ground-floor candles lit its basement THROUGH the floor, and an upstairs corridor
-        // wall glowed from the fixture in the room behind it. Tested here, before the distance
-        // test, because it is the term that throws away the most: a room claims one or two of the
-        // table's fixtures, not all of them.
-        // MONKEY (soft portal claims): `w` is the claim's WEIGHT, and it multiplies BOTH terms
-        // below. `wow_model.wgsl`'s copy of this loop keeps the old boolean stub (entities are
-        // ungated — it has neither the claim binding nor a per-fragment room key), which is the
-        // one place the two files' loop bodies deliberately differ; the PROFILE constants above
-        // stay byte-identical.
-        let w = interior_room_admits(i, room_inst, room_group, strict, P);
-        if (w <= 0.0) {
-            continue;
+    } else {
+        // MONKEY (room light lists): only this room's claimants and the unclaimed fixtures can be
+        // admitted (`interior_room_admits` returns 0 for every other one), so walk those two lists
+        // instead of the table. Both ascend by light index and are merged in that order, so the
+        // fixtures are summed in the same order the full loop sums them. A strict caller refuses
+        // the unclaimed ones, so it skips that list.
+        let room = room_index_find(room_inst, room_group);
+        let n_open = select(room_claims[ROOM_UNCLAIMED_BASE], 0u, strict);
+        var a = 0u;
+        var b = 0u;
+        loop {
+            var next_room = 0xffffffffu;
+            if (a < room.y) {
+                next_room = room_claims[ROOM_LIST_BASE + room.x + a];
+            }
+            var next_open = 0xffffffffu;
+            if (b < n_open) {
+                next_open = room_claims[ROOM_UNCLAIMED_BASE + 1u + b];
+            }
+            if (next_room == 0xffffffffu && next_open == 0xffffffffu) {
+                break;
+            }
+            var i = next_open;
+            if (next_room < next_open) {
+                i = next_room;
+                a = a + 1u;
+            } else {
+                b = b + 1u;
+            }
+            if (i < count) {
+                interior_room_fixture(i, P, N, room_inst, room_group, strict, k_fill, &direct, &fill);
+            }
         }
-        // MONKEY (soft falloff): `.w` is ALSO this fixture's EFFECTIVE RADIUS `R` in yards — the
-        // authored MOLT `attenuation_end` (or the M2 intensity bucket) already multiplied by the
-        // live `interiorAttenScale` at pack time. It replaces the flat 48 yd candidacy radius in
-        // `pos_range.w` on this lane, which is why the inn's 10 candles read as one uniform wash
-        // while the smithy's 3 forges read fine.
-        let reach_yd = color_lane.w;
-        // Candidacy is the FILL radius, not R: the wash reaches further than the direct pool (see
-        // the profile block), and rejecting at R would cut it off exactly at the pool's own edge —
-        // putting the rim back one term down.
-        let fill_yd = INTERIOR_FILL_SPAN * reach_yd;
-        let pos_range = wow_light.points[2u * i];
-        let to_light = pos_range.xyz - P;
-        let d2 = dot(to_light, to_light);
-        if (d2 > fill_yd * fill_yd) {
-            continue;
-        }
-        let d = sqrt(d2);
-        let c = color_lane.rgb;
-        // MONKEY (soft falloff): inverse square with the authored-start soft core, normalised so
-        // the 1 yd value is the retired hyperbolic's (profile block above).
-        // MONKEY (pool energy): a CONSTANT core radius in yards (profile block above) — the reach
-        // no longer scales the pool's brightness, only its window. `max` keeps the divide honest
-        // if the constant is ever tuned toward 0.
-        let r0 = max(INTERIOR_CORE_YD, 1e-3);
-        let atten = INTERIOR_CORE_GAIN / (1.0 + (d / r0) * (d / r0));
-        let window = interior_window(d, reach_yd, INTERIOR_DIRECT_POW);
-        let nl = max(
-            (dot(N, to_light / max(d, 1e-4)) + INTERIOR_WRAP) / (1.0 + INTERIOR_WRAP),
-            0.0,
-        );
-        // Normalised for BOTH terms: the table commits RAW over-gamut colour × intensity, and the
-        // smithy's three forges (1.4, 0.87, 0.4) drove the direct term to a washed-out white while
-        // the inn's unit candles sat where they should. The hue is what survives.
-        let c_norm = c / max(1.0, max(c.r, max(c.g, c.b)));
-        // Phase 1: this fixture's OWN cast shadow, sampled from its down-looking depth map
-        // (`torch_surface_shadow` correlates the fixture to its promoted map by position; 1.0 when
-        // it was not promoted). Per-fixture, so a pillar between the fragment and torch A darkens A's
-        // term without touching torch B's — the occlusion that makes an interior read
-        // lit-and-shadowed instead of flat. (`static_gx.wgsl` only; the wow_model copy of this
-        // function keeps the 1.0 `torch_shadow_for` stub — it has no group 3.)
-        // MONKEY (torch lane perf): the shadow sample is MULTIPLIED into the direct term, so
-        // where that term is already nothing the table scan and its four comparison taps buy
-        // nothing. And it very often is: `window` is exactly 0 past the fixture's reach, `nl` is 0
-        // on a surface facing away even under the wrap, and `w` is the claim weight a portal fade
-        // has taken to 0. The scan is by POSITION over up to sixteen slots, so this is the
-        // difference between "every interior fixture in range pays a scan on every fragment it
-        // touches" and "only the ones actually lighting it do". A branch rather than a `select`
-        // deliberately: the whole point is to NOT execute the taps.
-        let direct_w = atten * nl * window;
-        var s = 1.0;
-        if (direct_w * w > TORCH_SKIP_EPS) {
-            s = torch_surface_shadow(pos_range.xyz, P, N);
-        }
-        direct += c_norm * direct_w * s * w;
-        // MONKEY (soft falloff): the fill's profile is UNCHANGED in FORM — `(1 − d/r)²`, which is
-        // exactly `interior_window(d, r, 1.0)` — and only its radius moved, from R to
-        // `INTERIOR_FILL_SPAN·R`. That is the whole "gentle wash between the pools": at the fixture
-        // it is still 1 (so `interiorFill` keeps its tuned meaning) and it decays to 0 at 2R with a
-        // vanishing derivative, so the floor half-way between two candles is dim, not black.
-        let c_fill = mix(c_norm, vec3<f32>(dot(c_norm, vec3<f32>(0.299, 0.587, 0.114))), 0.5);
-        // The DOMINANT fixture's fill, not the SUM: an ambient room glow must not scale with the
-        // candle count, or a dense room (the inn's ~10 fixtures vs the smithy's 3) piles fill up
-        // until the rolloff saturates every surface to a flat white. `max` keeps the nearest/
-        // brightest fixture's glow and leaves the direct term to carry the per-fixture relief.
-        fill = max(fill, c_fill * (k_fill * interior_window(d, fill_yd, INTERIOR_FILL_POW) * w));
     }
     // Fill is INDIRECT bounce, so it is not shadowed; direct already carries each fixture's shadow.
     // MONKEY (shell candle add): STRICT callers want only the claimed DIRECT + FILL. The shell
