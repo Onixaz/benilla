@@ -23,7 +23,7 @@ use bevy::render::render_resource::TextureUsages;
 use bevy::render::renderer::raw_vulkan_init::RawVulkanInitSettings;
 use bevy::render::renderer::{RenderAdapter, RenderContext, RenderDevice};
 use bevy::render::sync_world::MainEntity;
-use bevy::render::view::ViewTarget;
+use bevy::render::view::{Msaa, ViewTarget};
 use bevy::render::{Extract, ExtractSchedule, Render, RenderApp, RenderSystems};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -158,12 +158,14 @@ impl Plugin for DlssNrPlugin {
         render_app.add_systems(Render, shutdown_runtime.in_set(RenderSystems::Cleanup));
         render_app
             .add_render_graph_node::<ViewNodeRunner<DlssNrEvalNode>>(Core3d, DlssNrEvalLabel)
+            // The opaque scene only: blended effects carry no depth or motion, so Feature 18 would
+            // read a flame quad's faint fringe as surface detail. Transparents draw over its output.
             .add_render_graph_edges(
                 Core3d,
                 (
-                    Node3d::StartMainPassPostProcessing,
+                    Node3d::MainOpaquePass,
                     DlssNrEvalLabel,
-                    Node3d::Bloom,
+                    Node3d::MainTransmissivePass,
                 ),
             );
     }
@@ -339,7 +341,7 @@ fn shutdown_runtime(shutdown: Option<Res<DlssNrShutdown>>, mut runtime: ResMut<D
     }
 }
 
-/// World-only Feature-18 evaluation, explicitly ordered before FFXGlow by `benilla-world`.
+/// World-only Feature-18 evaluation of the opaque scene, before any transparent draw.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 pub struct DlssNrEvalLabel;
 
@@ -352,13 +354,14 @@ impl ViewNode for DlssNrEvalNode {
         &'static DlssNrCamera,
         &'static ViewTarget,
         &'static ViewPrepassTextures,
+        &'static Msaa,
     );
 
     fn run<'w>(
         &self,
         _graph: &mut RenderGraphContext,
         context: &mut RenderContext<'w>,
-        (main_entity, _, target, prepass): QueryItem<'w, '_, Self::ViewQuery>,
+        (main_entity, _, target, prepass, msaa): QueryItem<'w, '_, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let device = world.resource::<RenderDevice>();
@@ -379,6 +382,12 @@ impl ViewNode for DlssNrEvalNode {
         let key = main_entity.id();
         let mut runtime = runtime.inner.lock().expect("DLSSNR runtime mutex poisoned");
         if runtime.failed {
+            return Ok(());
+        }
+        // The transparent pass resolves from the multisampled attachment, which would overwrite
+        // the single-sample texture Feature 18 writes back into.
+        if *msaa != Msaa::Off {
+            runtime.fail("Feature 18 needs gxMultisample 1 (MSAA off)".into());
             return Ok(());
         }
         if runtime.bypass.0.load(Ordering::Relaxed) {
@@ -596,7 +605,7 @@ impl ViewNode for DlssNrEvalNode {
                         .expect("Feature 18 remains resident while evaluating")
                         .evaluated = true;
                     info!(
-                        "dlssnr: Feature 18 is evaluating the {}x{} world view before FFXGlow (intensity={})",
+                        "dlssnr: Feature 18 is evaluating the {}x{} opaque world view (intensity={})",
                         width,
                         height,
                         ngx::DLSSNR_INTENSITY,

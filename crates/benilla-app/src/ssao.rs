@@ -152,6 +152,22 @@ impl Plugin for AmbientOcclusionPlugin {
             // After every solid path (static_gx precedes MainOpaquePass), before the water copy.
             .add_render_graph_edges(Core3d, (Node3d::MainOpaquePass, AoLabel, WaterDepthLabel));
     }
+
+    /// Feature 18 evaluates the occluded opaque scene, and the water refracts its result.
+    /// `DlssNrPlugin` registers its node in its own `finish`, which runs before this one.
+    #[cfg(feature = "dlss")]
+    fn finish(&self, app: &mut App) {
+        // `build` registered no node without a renderer.
+        if !app.is_plugin_added::<AssetPlugin>() {
+            return;
+        }
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.add_render_graph_edges(
+                Core3d,
+                (AoLabel, benilla_dlss5::DlssNrEvalLabel, WaterDepthLabel),
+            );
+        }
+    }
 }
 
 fn update_ao(

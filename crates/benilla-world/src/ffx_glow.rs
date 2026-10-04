@@ -29,8 +29,6 @@ use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 
 use crate::final_pass::FinalPassTarget;
 use crate::view::WorldCamera;
-#[cfg(feature = "dlss")]
-use benilla_dlss5::DlssNrEvalLabel;
 
 /// A camera running the FFXGlow pass: the frame's one gamma→linear decode, plus the glow add.
 #[derive(Component, Clone, Copy, ExtractComponent)]
@@ -1227,24 +1225,6 @@ impl Plugin for FfxGlowPlugin {
                 Core2d,
                 Node2d::MainTransparentPass,
             );
-    }
-
-    fn finish(&self, _app: &mut App) {
-        // `DlssNrPlugin` can only register its render node in its own `finish`, after Bevy has
-        // built the render sub-app. This plugin is added later, so its finish is the first point
-        // where the Feature-18 label is guaranteed to exist.
-        #[cfg(feature = "dlss")]
-        if let Some(render_app) = _app.get_sub_app_mut(RenderApp) {
-            render_app.add_render_graph_edges(
-                Core3d,
-                (
-                    Node3d::StartMainPassPostProcessing,
-                    DlssNrEvalLabel,
-                    FfxGlowLabel,
-                    Node3d::Bloom,
-                ),
-            );
-        }
     }
 }
 
