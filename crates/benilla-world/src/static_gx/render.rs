@@ -37,6 +37,7 @@ use std::ops::Range;
 
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::core_pipeline::core_3d::CORE_3D_DEPTH_FORMAT;
+use bevy::core_pipeline::prepass::ViewPrepassTextures;
 
 /// One baked item's draw facts, in bake order: the vertex word's low bits index its record.
 #[derive(Clone)]
@@ -227,14 +228,14 @@ struct GxPipelines {
     torch_layout: BindGroupLayoutDescriptor,
     sampler: Sampler,
     sampler_clamp: Sampler,
-    /// Keyed `(cutout, two_sided)`, re-specialized if the world view's (samples, format) changes.
+    /// Keyed `(cutout, two_sided)`, re-specialized if the world view's (view layout, format) changes.
     pipelines: HashMap<(bool, bool), CachedRenderPipelineId>,
     /// MONKEY (sun shadow perf): the key now carries the live `shadowFilter` too — the PCF branch
     /// is a shader DEF, so a change has to re-specialize the family. Once per CHANGE, not per
     /// frame: exactly the posture the (samples, format) pair beside it already has, and the same
     /// caveat (a flip re-queues four pipelines rather than reviving the previous four — a cvar
     /// A/B costs a shader build, a rendered frame costs nothing).
-    specialized_for: Option<(u32, TextureFormat, bool)>,
+    specialized_for: Option<(MeshPipelineViewLayoutKey, TextureFormat, bool)>,
 }
 
 fn init_pipelines(
@@ -358,6 +359,7 @@ type GxViewKey = (
     &'static Msaa,
     &'static ViewTarget,
     &'static StaticGxView,
+    Option<&'static ViewPrepassTextures>,
 );
 
 /// The bake's interleaved vertex layout, in the attribute-id order Bevy interleaves by: position,
@@ -422,7 +424,7 @@ fn prepare_static_gx(
 ) {
     let shadow_gaussian = shadow_filter.is_none_or(|f| f.0);
     let _t = super::gx_perf_guard(3);
-    let Some((view, msaa, _, _)) = views.iter().next() else {
+    let Some((view, msaa, _, _, prepass)) = views.iter().next() else {
         return;
     };
     let format = if view.hdr {
@@ -430,12 +432,13 @@ fn prepare_static_gx(
     } else {
         TextureFormat::bevy_default()
     };
-    let key = (msaa.samples(), format, shadow_gaussian);
+    // The view bind group Bevy prepares is keyed on MSAA and the view's prepass textures (the
+    // motion-vector prepass adds bindings 20 and 22); the pipeline must claim the same layout.
+    let view_key =
+        MeshPipelineViewLayoutKey::from(*msaa) | MeshPipelineViewLayoutKey::from(prepass);
+    let key = (view_key, format, shadow_gaussian);
     if pipes.specialized_for != Some(key) {
-        pipes.view_layout = mesh_pipeline
-            .get_view_layout(MeshPipelineViewLayoutKey::from(*msaa))
-            .main_layout
-            .clone();
+        pipes.view_layout = mesh_pipeline.get_view_layout(view_key).main_layout.clone();
         let shader: Handle<Shader> =
             asset_server.load("embedded://benilla_world/shaders/static_gx.wgsl");
         pipes.pipelines.clear();

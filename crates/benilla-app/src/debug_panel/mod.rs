@@ -256,6 +256,11 @@ fn toggle_panel(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugState>) 
     if dev_chord(&keys, KeyCode::KeyD) {
         debug.open = !debug.open;
     }
+    // The temporal diagnostic is useful while moving the camera, when opening the panel would
+    // obscure the scene. It remains in the developer chord plane and mirrors the Models checkbox.
+    if dev_chord(&keys, KeyCode::KeyV) {
+        debug.models.motion_vectors = !debug.models.motion_vectors;
+    }
 }
 
 /// Draw the panel as an overlay on the right over the full-screen world.
@@ -350,6 +355,8 @@ fn debug_panel_ui(
                                     format!("{}  ·  {}", kind_label(k), kind_counts[kind_index(k)]),
                                 );
                             }
+                            ui.add_space(6.0);
+                            ui.checkbox(&mut m.motion_vectors, "motion vectors (Ctrl+Shift+V)");
                             // Doodad animation cost: anim hosts, ticking ones (hidden ones pause),
                             // material-alpha samplers and UV-scrolling materials.
                             let ticking = anim_hosts.iter().filter(|h| h.active).count();

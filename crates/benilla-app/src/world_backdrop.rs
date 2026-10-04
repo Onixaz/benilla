@@ -43,14 +43,24 @@ const MAX_RENDER_AXIS: u32 = 8192;
 impl Default for RenderScale {
     /// `$WOW_RENDER_SCALE` overrides the default for the session only, never into `config.toml`.
     fn default() -> Self {
-        let scale = std::env::var("WOW_RENDER_SCALE")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .filter(|v| v.is_finite())
-            .map_or(1.0, |v| {
-                v.clamp(*RENDER_SCALE_RANGE.start(), *RENDER_SCALE_RANGE.end())
-            });
-        Self(scale)
+        // Feature 18 is initially wired as a same-resolution neural renderer. Its real scene,
+        // depth and motion-vector inputs must share pixels, so defer resolution experiments until
+        // controls and their validation land instead of silently combining it with this CVar.
+        #[cfg(feature = "dlss")]
+        {
+            Self(1.0)
+        }
+        #[cfg(not(feature = "dlss"))]
+        {
+            let scale = std::env::var("WOW_RENDER_SCALE")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .filter(|v| v.is_finite())
+                .map_or(1.0, |v| {
+                    v.clamp(*RENDER_SCALE_RANGE.start(), *RENDER_SCALE_RANGE.end())
+                });
+            Self(scale)
+        }
     }
 }
 
@@ -253,9 +263,16 @@ pub(crate) struct WorldBackdropPlugin;
 /// camera's factor follow together on the next frame.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut scale: ResMut<RenderScale>) {
     if ev.is("renderScale") {
-        scale.0 = ev
-            .num()
-            .clamp(*RENDER_SCALE_RANGE.start(), *RENDER_SCALE_RANGE.end());
+        #[cfg(feature = "dlss")]
+        {
+            scale.0 = 1.0;
+        }
+        #[cfg(not(feature = "dlss"))]
+        {
+            scale.0 = ev
+                .num()
+                .clamp(*RENDER_SCALE_RANGE.start(), *RENDER_SCALE_RANGE.end());
+        }
     }
 }
 

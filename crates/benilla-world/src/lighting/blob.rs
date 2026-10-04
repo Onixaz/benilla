@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(b.point_count(), MAX_LIVE_POINT_LIGHTS);
         assert_eq!(b.points.len(), 2 * MAX_LIVE_POINT_LIGHTS);
         assert_eq!(MAX_LIVE_POINT_LIGHTS, MAX_POINT_LIGHTS - 1);
-        assert!(MAX_LIVE_POINT_LIGHTS <= 255, "EXT_SEL_EMPTY is index 255");
+        const { assert!(MAX_LIVE_POINT_LIGHTS <= 255, "EXT_SEL_EMPTY is index 255") };
     }
 
     /// The glue scene's fog toggle flips only the enable and leaves the race's fog rows standing.

@@ -400,9 +400,11 @@ mod streamed_refresh_tests {
     #[test]
     fn shadow_cache_refresh_runs_without_volumetric_fog_and_is_quiet_when_unchanged() {
         let mut app = App::new();
-        let mut video = VideoConfig::default();
-        video.volumetric_fog = 0;
-        video.world_shadows = false;
+        let video = VideoConfig {
+            volumetric_fog: 0,
+            world_shadows: false,
+            ..Default::default()
+        };
         app.insert_resource(video)
             .init_resource::<StaticGx>()
             .init_resource::<WorldLane>()

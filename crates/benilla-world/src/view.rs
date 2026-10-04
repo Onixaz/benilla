@@ -299,6 +299,31 @@ pub fn within_farclip(
 #[derive(Component)]
 pub struct WorldCamera;
 
+/// Keep temporal prepasses on the one gameplay/world view. Portrait, minimap and UI cameras are
+/// deliberately excluded: M2 history is meaningful to the world renderer only, and the UI owns
+/// its own targets.
+#[allow(clippy::type_complexity)] // one marker query: only world views receive temporal targets
+fn enable_world_motion_vector_prepass(
+    mut commands: Commands,
+    cameras: Query<
+        Entity,
+        (
+            With<WorldCamera>,
+            Or<(
+                Without<bevy::core_pipeline::prepass::DepthPrepass>,
+                Without<bevy::core_pipeline::prepass::MotionVectorPrepass>,
+            )>,
+        ),
+    >,
+) {
+    for entity in &cameras {
+        commands.entity(entity).insert((
+            bevy::core_pipeline::prepass::DepthPrepass,
+            bevy::core_pipeline::prepass::MotionVectorPrepass,
+        ));
+    }
+}
+
 /// The `$WOW_MSAA` knob as a Bevy `Msaa` level, 4x when unset. `8` falls back to 4x:
 /// `Rgba16Float` is only guaranteed `[1, 4]` samples, and there is no adapter to ask here.
 pub fn msaa_from_env() -> bevy::render::view::Msaa {
@@ -380,8 +405,10 @@ impl Plugin for ViewPlugin {
 pub(crate) fn plugin(app: &mut App) {
     // In `Update`, so this frame's `nearclip` write reaches this frame's projection, as `0x511bc0`
     // runs inside the world-frame driver; initialized here too for a harness with only this plugin.
-    app.init_resource::<ViewDistance>()
-        .add_systems(Update, stamp_near_clip);
+    app.init_resource::<ViewDistance>().add_systems(
+        Update,
+        (stamp_near_clip, enable_world_motion_vector_prepass),
+    );
     app.add_systems(
         Update,
         publish_camera_pose

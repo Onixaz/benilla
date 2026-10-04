@@ -741,7 +741,13 @@ pub(crate) mod schedule_tests {
     ///
     /// twow merge of everwood f5547a63: 5,016 = 4,999 + 17 from the twow systems. Read off the
     /// merged tree's test run.
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_016;
+    ///
+    /// twow merge of dlss-experimental 90f3e02b: 5,022 = 5,016 + 6. `motion_vectors::sync_debug_view`
+    /// and `view::enable_world_motion_vector_prepass` each against the two exclusive systems
+    /// (`net::apply::apply_net_updates`, `terrain_stream::collider::finish_colliders`), and
+    /// `sync_debug_view` reading `DebugState` against two of its writers (a debug toggle may land
+    /// a frame late). Read off the merged tree's dump.
+    const UPDATE_ACTIONABLE_CEILING: usize = 5_022;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

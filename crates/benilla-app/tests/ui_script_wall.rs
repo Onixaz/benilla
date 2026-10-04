@@ -38,7 +38,10 @@ fn family(rel: &str) -> Family {
 }
 
 /// The standing count of `Game` files; raise it only with the reason written down.
-const CEILING: usize = 40;
+///
+/// twow: 42 = 40 + `debug_panel/mod.rs` and `debug_panel/lighting_controls.rs`, the dev lighting
+/// knobs, which write CVars through `UiScript::set_cvar_engine`, the queue Lua `SetCVar` feeds.
+const CEILING: usize = 42;
 
 /// How far under [`CEILING`] the count may sit before the test asks for the ceiling to follow it.
 const SLACK: usize = 4;

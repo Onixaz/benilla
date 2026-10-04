@@ -146,6 +146,9 @@ pub struct ModelDebug {
     pub blend_visible: [bool; 5],
     /// WMO portal culling: on is the reference's per-group PVS, off draws every group.
     pub portal_cull: bool,
+    /// Replace the world source with its motion-vector prepass diagnostic. The app toggles this
+    /// through the developer chord; `$WOW_MOTION_VECTORS=1` starts a capture in the same mode.
+    pub motion_vectors: bool,
 }
 
 impl Default for ModelDebug {
@@ -155,6 +158,7 @@ impl Default for ModelDebug {
             blend_visible: [true; 5],
             // `WOW_NOPORTALCULL=1` starts the cull off, for a headless A/B of one viewpoint.
             portal_cull: std::env::var("WOW_NOPORTALCULL").is_err(),
+            motion_vectors: std::env::var_os("WOW_MOTION_VECTORS").is_some(),
         }
     }
 }
