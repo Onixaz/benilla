@@ -351,7 +351,7 @@ fn run(
     // Logon: the dial and the SRP6 exchange against realmd.
     let mut logon = {
         stage(LoginStage::Connecting);
-        match benilla_protocol::logon(&req.host, &req.user, &req.pass) {
+        match benilla_protocol::logon_as_build(&req.host, &req.user, &req.pass, login_build()) {
             Ok(l) => l,
             Err(e) => {
                 if canceled() {
@@ -1482,6 +1482,15 @@ fn writer_loop(
             },
         }
     }
+}
+
+/// `$WOW_LOGIN_BUILD`: the build realmd sees, 5875 (the reference's) when unset or unparsable.
+/// Turtle WoW's realmd wants its 1.18.1 build, [`benilla_protocol::TURTLE_LOGIN_BUILD`] (7272).
+fn login_build() -> u16 {
+    std::env::var("WOW_LOGIN_BUILD")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(benilla_protocol::CLIENT_BUILD)
 }
 
 #[cfg(test)]
