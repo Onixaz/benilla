@@ -3,6 +3,17 @@
 A fork of [**benilla**](https://github.com/samwhosung/benilla), the from-scratch World of Warcraft 1.12.1
 client in Rust and Bevy by samwhosung. **[Read the original benilla README →](https://github.com/samwhosung/benilla/blob/main/README.md)**
 
+**TL;DR, launching it** (Windows, PowerShell). You need [Rust](https://rustup.rs) (the right version
+installs itself on the first build) and your own WoW 1.12.1 install:
+
+```powershell
+$env:WOW_DATA = 'C:\path\to\WoW\Data'   # your 1.12.1 install's Data folder; benilla only reads it
+$env:WOW_HOST = 'logon.example.com'     # the server's realmlist address; default localhost
+cargo play                              # builds and runs the optimized client
+```
+
+The first build takes several minutes. `cargo play` is short for `cargo run --profile play -p benilla`.
+
 Upstream benilla tracks the 1.12.1 client exactly, so changes that go beyond it are scattered across forks. This fork tries to bring them together in one place: work from other forks (credited in each section below) and its own, in four areas:
 
 1. **[Turtle WoW support](#turtle-wow-support)**: log in, create characters and play on Turtle WoW, including its races, auction house and transmog.
