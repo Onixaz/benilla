@@ -734,6 +734,9 @@ fn send_spell_cast(
         pending.arm_item(spell_id, now);
     } else {
         pending.arm(spell_id, now, normal_cast);
+        if explicit_object.is_none() && item_target.is_none() {
+            pending.offer_resend(target);
+        }
     }
     if on_next_swing {
         queued_melee.arm(spell_id);

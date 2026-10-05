@@ -598,6 +598,27 @@ fn cast_result(
     // Is this the reply to our outstanding cast (`0x6e7408 cmp ecx,[0xceca88]`)? Read before either
     // arm clears the guard: both clears are the reference's one `0x6e741a call 0x6e4940(0x1c)`.
     let in_flight = pending.committed(Instant::now()) == Some(spell_id);
+    // The spell queue's refused early cast goes out again instead of failing: no red line, no GCD
+    // clear, no fail edge, and the guard keeps holding until the resend resolves.
+    if !success
+        && matches!(
+            reason,
+            Some(
+                crate::spell::inflight::REFUSED_IN_PROGRESS
+                    | crate::spell::inflight::REFUSED_NOT_READY
+            )
+        )
+        && pending.schedule_resend(spell_id, Instant::now())
+    {
+        if *crate::net::CAST_TRACE {
+            info!("cast-trace: RECV CAST_RESULT refusal {reason:?} — spell {spell_id} resends");
+        }
+        benilla_assets::trace::line(
+            "cast",
+            &format!("refused spell {spell_id} reason={reason:?}"),
+        );
+        return None;
+    }
     if !success {
         // `HandleCastFailed 0x6e1a00` clears the GCD armed at send (`0x6e1d83 → 0x6e1630`), and the
         // bit-25 revert below drops a parked record; the spell's own recovery starts at SPELL_GO,

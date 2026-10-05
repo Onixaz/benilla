@@ -34,10 +34,11 @@ const CAST_SLACK: Duration = Duration::from_secs(2);
 /// `SMSG_SPELL_FAILED_OTHER`), keyed on the spell id, or by [`local_self_cancel`]; `deadline`
 /// covers a lost resolution.
 ///
-/// The spell queue (`spellQueue`, benilla's own; the reference waits for the resolution): a timed cast's
-/// guard also opens at send + cast time + `spellQueueBufferMs`, so the next cast leaves on the
-/// local timer instead of one round trip later. The server's cast started half a round trip after
-/// the send, so the buffer only has to cover its tick.
+/// The spell queue (`spellQueue`, benilla's own; the reference waits for the resolution): a timed
+/// cast's guard also opens at send + cast time + `spellQueueBufferMs`, so the next cast leaves on
+/// the local timer instead of one round trip later. The server's cast started half a round trip
+/// after the send, so the buffer only has to cover its tick. A cast sent early that the server
+/// refuses as in progress or not ready is sent once more, a buffer later ([`Resend`]).
 #[derive(Resource)]
 pub(crate) struct PendingCast {
     cast: Option<PendingCastState>,
@@ -85,7 +86,28 @@ struct PendingCastState {
     /// (`0x6e5026`) and discriminates at the gate instead; a ranged shot is recorded here without
     /// guarding, so the `modalNextSpell` test (`0x6e7408`) still matches it.
     guards: bool,
+    resend: Resend,
 }
+
+/// The spell queue's one resend of a plain `CMSG_CAST_SPELL` it sent early: the server refuses
+/// a cast that lands before its last one finished (`SPELL_FAILED_SPELL_IN_PROGRESS` 0x61,
+/// `SPELL_FAILED_NOT_READY` 0x3c), and by a buffer after the refusal arrives it has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Resend {
+    /// Not sent early, or not a plain spell cast: a refusal resolves it as the reference does.
+    None,
+    /// Sent early at this target; a refusal schedules the resend.
+    Armed(Option<u64>),
+    /// Refused; the resend goes out at the instant.
+    Due(Option<u64>, Instant),
+    /// Resent once already.
+    Spent,
+}
+
+/// The server's in-progress refusal (`SPELL_FAILED_SPELL_IN_PROGRESS`).
+pub(crate) const REFUSED_IN_PROGRESS: u8 = 0x61;
+/// The server's not-ready refusal (`SPELL_FAILED_NOT_READY`).
+pub(crate) const REFUSED_NOT_READY: u8 = 0x3c;
 
 impl PendingCastState {
     /// Guarding, inside its deadline, and not yet past the spell queue's early open.
@@ -125,6 +147,7 @@ impl PendingCast {
             deadline: now + SEND_PROVISIONAL,
             release: None,
             guards,
+            resend: Resend::None,
         });
     }
 
@@ -138,7 +161,47 @@ impl PendingCast {
             deadline: now + ITEM_SEND_PROVISIONAL,
             release: None,
             guards: true,
+            resend: Resend::None,
         });
+    }
+
+    /// After [`Self::arm`] for a plain `CMSG_CAST_SPELL` at `target`: offer the one resend, kept
+    /// only when the cast went out over an early-opened predecessor.
+    pub(crate) fn offer_resend(&mut self, target: Option<u64>) {
+        let early = self.released.is_some();
+        if let Some(p) = self.cast.as_mut().filter(|p| early && p.guards) {
+            p.resend = Resend::Armed(target);
+        }
+    }
+
+    /// A refusal of our cast as in progress or not ready: schedule the resend a buffer from now
+    /// and keep guarding, or answer false and let the refusal resolve it.
+    pub(crate) fn schedule_resend(&mut self, spell_id: u32, now: Instant) -> bool {
+        let buffer = self.spell_queue_buffer;
+        let Some(p) = self.cast.as_mut().filter(|p| p.spell_id == spell_id) else {
+            return false;
+        };
+        let Resend::Armed(target) = p.resend else {
+            return false;
+        };
+        p.resend = Resend::Due(target, now + buffer);
+        p.deadline = now + buffer + SEND_PROVISIONAL;
+        true
+    }
+
+    /// The resend whose instant has come, as `(spell_id, target)`; the record restarts from it.
+    pub(crate) fn take_due_resend(&mut self, now: Instant) -> Option<(u32, Option<u64>)> {
+        let p = self.cast.as_mut()?;
+        let Resend::Due(target, at) = p.resend else {
+            return None;
+        };
+        if now < at {
+            return None;
+        }
+        p.resend = Resend::Spent;
+        p.sent = now;
+        p.deadline = now + SEND_PROVISIONAL;
+        Some((p.spell_id, target))
     }
 
     /// A new record over an early-opened one keeps the old id in [`Self::released`].
@@ -197,6 +260,17 @@ impl PendingCast {
             return;
         }
         self.clear_if(spell_id);
+    }
+}
+
+/// Sends the spell queue's due resend, the same `CMSG_CAST_SPELL` the server refused.
+pub(super) fn send_due_resend(mut pending: ResMut<PendingCast>, net: Res<NetCommands>) {
+    if let Some((spell_id, target)) = pending.take_due_resend(Instant::now()) {
+        if *crate::net::CAST_TRACE {
+            info!("cast-trace: SEND spell queue resend — spell {spell_id}");
+        }
+        benilla_assets::trace::line("cast", &format!("resend spell {spell_id}"));
+        let _ = net.0.send(ClientCommand::CastSpell { spell_id, target });
     }
 }
 
@@ -667,6 +741,70 @@ mod tests {
         );
         g.complete_if(FIREBALL, true); // the cast before still lands; nothing to open
         assert!(!g.in_flight(t1 + MS(20)));
+    }
+
+    /// A Fireball sent over an early-opened one, at `t0 + 1560 ms`.
+    fn early_second_cast(buffer_ms: u64) -> (PendingCast, Instant) {
+        let t0 = Instant::now();
+        let mut g = queued(buffer_ms);
+        g.arm(FIREBALL, t0, true);
+        g.refine(1_500, t0 + MS(150));
+        let t1 = t0 + MS(1_560);
+        g.arm(FIREBALL, t1, true);
+        g.offer_resend(Some(42));
+        (g, t1)
+    }
+
+    #[test]
+    fn a_refused_early_cast_is_resent_once_a_buffer_later() {
+        let (mut g, t1) = early_second_cast(55);
+        let refused = t1 + MS(150);
+        assert!(g.schedule_resend(FIREBALL, refused));
+        assert!(
+            g.in_flight(refused + MS(10)),
+            "the guard holds for the resend"
+        );
+        assert_eq!(g.take_due_resend(refused + MS(54)), None);
+        assert_eq!(
+            g.take_due_resend(refused + MS(55)),
+            Some((FIREBALL, Some(42))),
+            "the same spell at the same target"
+        );
+        assert_eq!(g.take_due_resend(refused + MS(56)), None, "sent once");
+        assert!(
+            !g.schedule_resend(FIREBALL, refused + MS(200)),
+            "a second refusal resolves the cast as the reference would"
+        );
+    }
+
+    #[test]
+    fn the_predecessors_late_echo_does_not_resolve_the_pending_resend() {
+        let (mut g, t1) = early_second_cast(55);
+        assert!(g.schedule_resend(FIREBALL, t1 + MS(150)));
+        g.complete_if(FIREBALL, false); // the predecessor's CAST_RESULT ok
+        g.complete_if(FIREBALL, true); // and its GO
+        assert!(g.in_flight(t1 + MS(170)));
+        assert!(g.take_due_resend(t1 + MS(205)).is_some());
+    }
+
+    #[test]
+    fn a_cast_not_sent_early_takes_no_resend() {
+        let t0 = Instant::now();
+        let mut g = queued(55);
+        g.arm(FIREBALL, t0, true);
+        g.offer_resend(Some(42));
+        assert!(
+            !g.schedule_resend(FIREBALL, t0 + MS(150)),
+            "a refusal of an ordinary cast is the reference's failure"
+        );
+    }
+
+    #[test]
+    fn a_local_cancel_drops_the_due_resend() {
+        let (mut g, t1) = early_second_cast(55);
+        assert!(g.schedule_resend(FIREBALL, t1 + MS(150)));
+        g.clear_if(FIREBALL); // moved or Esc
+        assert_eq!(g.take_due_resend(t1 + MS(300)), None);
     }
 
     #[test]

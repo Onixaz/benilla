@@ -83,6 +83,9 @@ impl Plugin for SpellPlugin {
                     inflight::local_self_cancel
                         .in_set(UnitFeed)
                         .in_set(LocalCancel),
+                    inflight::send_due_resend
+                        .after(WorldStage::Net)
+                        .before(UnitFeed),
                     mods::track_class_family
                         .after(WorldStage::Net)
                         .before(UnitFeed),
