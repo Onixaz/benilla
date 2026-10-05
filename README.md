@@ -1,4 +1,4 @@
-# benilla-enhanced
+# benilla-plus
 
 A fork of [**benilla**](https://github.com/samwhosung/benilla), the from-scratch World of Warcraft 1.12.1
 client in Rust and Bevy by samwhosung. **[Read the original benilla README →](https://github.com/samwhosung/benilla/blob/main/README.md)**
