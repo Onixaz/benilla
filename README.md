@@ -6,8 +6,8 @@ client in Rust and Bevy by samwhosung. **[Read the original benilla README →](
 Upstream benilla tracks the 1.12.1 client exactly, so changes that go beyond it are scattered across forks. This fork tries to bring them together in one place: work from other forks (credited in each section below) and its own, in four areas:
 
 1. **[Turtle WoW support](#turtle-wow-support)**: log in, create characters and play on Turtle WoW, including its races, auction house and transmog.
-2. **[Enhanced graphics](#enhanced-graphics)**: an optional modern look (shadows, modern fog, volumetric light, water, weather). The **Classic** preset keeps the original 1.12 image.
-3. **[HD models and textures](#hd-models-and-textures)**: support for HD asset packs such as Project Reforged.
+2. **[Enhanced graphics](#enhanced-graphics)**: an optional modern look (shadows, modern fog, volumetric light, water, weather) and HD asset. The **Classic** preset keeps the original 1.12 image.
+3. **[Gameplay features](#gameplay-features)**: modern quality of life the 1.12 client never had, starting with a built-in **spell queue** in the spirit of nampower. More to come.
 4. **[DLSS 5 Neural Rendering](#dlss-5-neural-rendering-experimental)** *(experimental)*: NVIDIA's neural renderer applied to the world, on RTX cards.
 
 
@@ -35,6 +35,29 @@ yourself under **Options → Advanced Graphics**. **Classic** keeps the original
 
 Based on https://github.com/pkuzic/benilla-everwood_graphics
 
+### HD models and textures
+
+benilla loads HD asset packs such as Project Reforged from your install's patch chain, like the game
+does: higher-resolution character skins and overlays (VanillaHelpers' larger character atlas, at any
+power-of-two size) and HD models. Install the pack into your WoW folder as its instructions say;
+benilla needs no extra setting.
+
+## Gameplay features
+
+Things the 1.12 client never did, built into benilla instead of patched in with a DLL. Each one is off
+by default, so out of the box benilla plays exactly like 1.12.
+
+### Spell queue
+
+The 1.12 client waits for the server to confirm every cast before it lets you start the next one, so
+each cast costs you a full round trip on top of its cast time. On 150 ms of latency, that is 150 ms
+lost on every cast. Players have fixed this with [nampower](https://github.com/namreeb/nampower), a
+DLL injected into the game; benilla does the same thing natively.
+
+### More to come
+
+More quality-of-life features are planned like classic era addon support. Ideas and pull requests are welcome.
+
 ## Turtle WoW support
 
 benilla plays on Turtle WoW: logging in, creating characters (including Turtle's races), the auction
@@ -50,13 +73,6 @@ $env:WOW_LOGIN_BUILD = 7272
 Without it, benilla presents the stock 1.12.1 build (5875), as for any vanilla server.
 
 Initial work from https://github.com/jhinzuo2/benilla-twow
-
-## HD models and textures
-
-benilla loads HD asset packs such as Project Reforged from your install's patch chain, like the game
-does: higher-resolution character skins and overlays (VanillaHelpers' larger character atlas, at any
-power-of-two size) and HD models. Install the
-pack into your WoW folder as its instructions say; benilla needs no extra setting.
 
 ## DLSS 5 Neural Rendering (experimental)
 
