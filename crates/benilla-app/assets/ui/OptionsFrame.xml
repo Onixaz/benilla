@@ -428,6 +428,21 @@
             .. "There is no exclusive fullscreen mode. WoW itself removed one in 8.0.1, and "
             .. "modern Classic offers these same two."
 
+        -- 1.12 has no spell queue: it waits for the server before every next cast.
+        BENILLA_TOOLTIP_SPELL_QUEUE =
+            "Lets your next spell start as soon as your cast bar finishes, instead of waiting "
+            .. "for the server to confirm the last one.\n\n"
+            .. "The original client waits a full round trip after every cast, so with 150 ms of "
+            .. "latency each cast takes 150 ms longer than its cast time. Instant spells are "
+            .. "unaffected; they already follow the global cooldown."
+
+        BENILLA_TOOLTIP_SPELL_QUEUE_BUFFER =
+            "How long past the end of your cast bar Spell Queue waits before the next spell may "
+            .. "go out.\n\n"
+            .. "The server only processes spells on its tick, so a cast sent too early is refused "
+            .. "with \"Another action is in progress\". Raise this if you see that error; lower it "
+            .. "to cast sooner."
+
         -- 1.12's GAMMA text points at gray-bar art this page does not have.
         BENILLA_TOOLTIP_BRIGHTNESS =
             "Lightens or darkens the whole picture — nights, caves and interiors are what it is "
@@ -1024,6 +1039,7 @@
                 "RowCameraFollowStyle", "RowFollowTerrain", "RowHeadBob",
                 "RowAutoFollowSpeed", "RowWaterCollision", "RowSmartPivot",
                 "RowMouseLookSpeed", "RowMaxCameraDistance",
+                "RowSpellQueue", "RowSpellQueueBuffer",
             },
             Audio = {
                 "RowEnableAll", "RowMaster", "RowSound", "RowMusic", "RowAmbience",
@@ -1320,6 +1336,9 @@
             if row.fmt == "raw" then
                 return string.format("%d", math.floor(value + 0.5))
             end
+            if row.fmt == "ms" then
+                return string.format("%d ms", math.floor(value + 0.5))
+            end
             -- The clamp guards a short stops table.
             if row.stops then
                 local i = math.floor(value + 0.5) + 1
@@ -1575,6 +1594,8 @@
                 local style = GetCVar("cameraSmoothStyle")
                 BenillaOptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyControlsRowAutoFollowSpeed,
                     style ~= "0" and style ~= "3")
+                BenillaOptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyControlsRowSpellQueueBuffer,
+                    GetCVar("spellQueue") == "1")
                 return
             end
             if key == "Nameplates" then
@@ -2471,6 +2492,28 @@
                                                 BenillaOptionsRow_OnLoad(this, "cameraDistanceMaxFactor",
                                                     "Max Camera Distance", "OPTION_TOOLTIP_MAX_FOLLOW_DIST")
                                                 BenillaOptionsSliderRow_Setup(this, 1.0, 2.0, 0.1, "yards")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <!-- 1.12 has no spell queue; the buffer greys out with it off. -->
+                                        <Frame name="$parentRowSpellQueue" inherits="BenillaOptionsCheckboxRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowMaxCameraDistance" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowMaxCameraDistance" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "spellQueue", "Spell Queue",
+                                                    "BENILLA_TOOLTIP_SPELL_QUEUE")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowSpellQueueBuffer" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowSpellQueue" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowSpellQueue" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "spellQueueBufferMs", "Spell Queue Buffer",
+                                                    "BENILLA_TOOLTIP_SPELL_QUEUE_BUFFER")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 200, 5, "ms")
                                             </OnLoad></Scripts>
                                         </Frame>
                                     </Frames>

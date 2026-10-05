@@ -1509,6 +1509,11 @@ mod tests {
         assert_eq!(d["cameraYawSmoothSpeed"], follow.yaw_speed);
         assert_eq!(FollowStyle::default(), FollowStyle::Smart);
         assert_eq!(d["autoLootDefault"] != 0.0, LootConfig::default().auto_loot);
+        assert_eq!(d["spellQueue"], 0.0, "the spell queue ships off");
+        assert_eq!(
+            d["spellQueueBufferMs"],
+            crate::spell::inflight::SPELL_QUEUE_BUFFER_MS as f32
+        );
         assert_eq!(
             d["showLootSpam"] != 0.0,
             LootConfig::default().show_loot_spam
@@ -2926,6 +2931,10 @@ mod tests {
         },
         |app| {
             app.add_observer(crate::spell::cast_target::on_cvar);
+        },
+        |app| {
+            app.init_resource::<crate::spell::PendingCast>();
+            app.add_observer(crate::spell::inflight::on_cvar);
         },
         |app| {
             app.add_observer(crate::combat_text::on_cvar);

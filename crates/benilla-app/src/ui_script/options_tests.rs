@@ -3151,6 +3151,11 @@ fn every_row_tooltip_key_resolves_in_the_real_global_strings() {
                 "BENILLA_TOOLTIP_INTERIOR_DARKNESS",
                 "AdvancedGraphicsRowInteriorDarkness",
             ),
+            ("BENILLA_TOOLTIP_SPELL_QUEUE", "ControlsRowSpellQueue"),
+            (
+                "BENILLA_TOOLTIP_SPELL_QUEUE_BUFFER",
+                "ControlsRowSpellQueueBuffer",
+            ),
         ];
         if let Some((_, want_row)) = BENILLA_OWNED.iter().find(|(k, _)| *k == key) {
             assert_eq!(row, *want_row, "{row}: not this row's string");

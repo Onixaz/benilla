@@ -17,7 +17,7 @@ mod cast_send;
 pub(crate) mod cast_target;
 pub(crate) mod cooldowns;
 pub(crate) mod group_relation;
-mod inflight;
+pub(crate) mod inflight;
 mod mods;
 pub(crate) mod net;
 mod range_units;
@@ -76,6 +76,7 @@ impl Plugin for SpellPlugin {
             .init_resource::<targeting::UnitPick>()
             .init_resource::<group_relation::GroupRoster>()
             .add_observer(cast_target::on_cvar)
+            .add_observer(inflight::on_cvar)
             .add_systems(
                 Update,
                 (

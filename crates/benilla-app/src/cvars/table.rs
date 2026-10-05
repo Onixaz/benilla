@@ -213,6 +213,20 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // is its name string): a friendly cast that binds nothing falls back to the caster.
     // `TOGGLEAUTOSELFCAST` toggles it.
     same("autoSelfCast", "0"),
+    // The spell queue, benilla's own: the knob is [`crate::spell::inflight::PendingCast`]. The reference
+    // holds the next cast until the server resolves the last (`0xceca88`, cleared at `0x6e7408`).
+    ours(
+        "spellQueue",
+        "0",
+        "benilla's own, off by default — the reference waits one round trip for the server's \
+         resolution before the next cast; on, a timed cast's guard opens on the local timer",
+    ),
+    ours(
+        "spellQueueBufferMs",
+        "55",
+        "benilla's own — the spell queue's margin past the local cast end for the server's tick, \
+         nampower's 55 ms default",
+    ),
     // The five saved camera views and the live index, at the reference's names and default strings;
     // owned by [`crate::player::camera_view`]. Registered so a `SaveView` persists.
     same(
