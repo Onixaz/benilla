@@ -1,4 +1,4 @@
-# benilla — enhanced
+# benilla-enhanced
 
 A fork of [**benilla**](https://github.com/samwhosung/benilla), the from-scratch World of Warcraft 1.12.1
 client in Rust and Bevy by samwhosung. **[Read the original benilla README →](https://github.com/samwhosung/benilla/blob/main/README.md)**
@@ -6,8 +6,8 @@ client in Rust and Bevy by samwhosung. **[Read the original benilla README →](
 Upstream benilla tracks the 1.12.1 client exactly, so changes that go beyond it are scattered across forks. This fork tries to bring them together in one place: work from other forks (credited in each section below) and its own, in four areas:
 
 1. **[Turtle WoW support](#turtle-wow-support)**: log in, create characters and play on Turtle WoW, including its races, auction house and transmog.
-2. **[Enhanced graphics](#enhanced-graphics)**: an optional modern look (shadows, modern fog, volumetric light, water, weather) and HD asset. The **Classic** preset keeps the original 1.12 image.
-3. **[Gameplay features](#gameplay-features)**: modern quality of life the 1.12 client never had, starting with a built-in **spell queue** in the spirit of nampower. More to come.
+2. **[Enhanced graphics](#enhanced-graphics)**: an optional modern look (shadows, modern fog, volumetric light, water, weather) and HD assets.
+3. **[Gameplay features](#gameplay-features)**: modern quality of life the 1.12 client never had, starting with a built-in.
 4. **[DLSS 5 Neural Rendering](#dlss-5-neural-rendering-experimental)** *(experimental)*: NVIDIA's neural renderer applied to the world, on RTX cards.
 
 
