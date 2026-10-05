@@ -16,9 +16,9 @@ The first build takes several minutes. `cargo play` is short for `cargo run --pr
 
 Upstream benilla tracks the 1.12.1 client exactly, so changes that go beyond it are scattered across forks. This fork tries to bring them together in one place: work from other forks (credited in each section below) and its own, in four areas:
 
-1. **[Turtle WoW support](#turtle-wow-support)**: log in, create characters and play on Turtle WoW, including its races, auction house and transmog.
+1. **[Turtle WoW support](#turtle-wow-support)**: log in, create characters and play on Turtle WoW servers.
 2. **[Enhanced graphics](#enhanced-graphics)**: an optional modern look (shadows, modern fog, volumetric light, water, weather) and HD assets.
-3. **[Gameplay features](#gameplay-features)**: modern quality of life the 1.12 client never had, starting with a built-in.
+3. **[Gameplay features](#gameplay-features)**: modern quality of life the 1.12 client never had.
 4. **[DLSS 5 Neural Rendering](#dlss-5-neural-rendering-experimental)** *(experimental)*: NVIDIA's neural renderer applied to the world, on RTX cards.
 
 
