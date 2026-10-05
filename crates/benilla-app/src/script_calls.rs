@@ -82,6 +82,17 @@ pub(crate) fn apply_script_calls(
             cast.ladder.resume_after_pick(held, &ctx);
         }
     });
+    // The spell queue's due press, after this frame's calls (a fresh press replaced it), with the
+    // same pick and resume as a press made now.
+    if crate::spell::fire_queued_press(&mut appliers.p3()) {
+        if let Some(held) = appliers.p3().ladder.take_held() {
+            if appliers.p7().pick_for_cast(held) {
+                let mut cast = appliers.p3();
+                let ctx = cast.targeting.context();
+                cast.ladder.resume_after_pick(held, &ctx);
+            }
+        }
+    }
 }
 
 /// Apply every queued call front to back. Applying one may queue more: a macro's lines run

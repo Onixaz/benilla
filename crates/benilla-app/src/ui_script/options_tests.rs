@@ -3153,6 +3153,10 @@ fn every_row_tooltip_key_resolves_in_the_real_global_strings() {
             ),
             ("BENILLA_TOOLTIP_SPELL_QUEUE", "ControlsRowSpellQueue"),
             (
+                "BENILLA_TOOLTIP_SPELL_QUEUE_WINDOW",
+                "ControlsRowSpellQueueWindow",
+            ),
+            (
                 "BENILLA_TOOLTIP_SPELL_QUEUE_BUFFER",
                 "ControlsRowSpellQueueBuffer",
             ),

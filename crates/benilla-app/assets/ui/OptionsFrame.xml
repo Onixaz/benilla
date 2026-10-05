@@ -436,6 +436,12 @@
             .. "latency each cast takes 150 ms longer than its cast time. Instant spells are "
             .. "unaffected; they already follow the global cooldown."
 
+        BENILLA_TOOLTIP_SPELL_QUEUE_WINDOW =
+            "How early you can press your next spell while a cast or cooldown is finishing.\n\n"
+            .. "A press inside this window is remembered and goes out the moment it is allowed, "
+            .. "so you never have to time the end of a cast bar. Retail WoW's default is 400 ms; "
+            .. "0 turns the queue off and leaves only the faster cast start."
+
         BENILLA_TOOLTIP_SPELL_QUEUE_BUFFER =
             "How long past the end of your cast bar Spell Queue waits before the next spell may "
             .. "go out.\n\n"
@@ -1039,7 +1045,7 @@
                 "RowCameraFollowStyle", "RowFollowTerrain", "RowHeadBob",
                 "RowAutoFollowSpeed", "RowWaterCollision", "RowSmartPivot",
                 "RowMouseLookSpeed", "RowMaxCameraDistance",
-                "RowSpellQueue", "RowSpellQueueBuffer",
+                "RowSpellQueue", "RowSpellQueueWindow", "RowSpellQueueBuffer",
             },
             Audio = {
                 "RowEnableAll", "RowMaster", "RowSound", "RowMusic", "RowAmbience",
@@ -1595,6 +1601,8 @@
                 BenillaOptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyControlsRowAutoFollowSpeed,
                     style ~= "0" and style ~= "3")
                 BenillaOptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyControlsRowSpellQueueBuffer,
+                    GetCVar("spellQueue") == "1")
+                BenillaOptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyControlsRowSpellQueueWindow,
                     GetCVar("spellQueue") == "1")
                 return
             end
@@ -2505,10 +2513,21 @@
                                                     "BENILLA_TOOLTIP_SPELL_QUEUE")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <Frame name="$parentRowSpellQueueBuffer" inherits="BenillaOptionsSliderRowTemplate">
+                                        <Frame name="$parentRowSpellQueueWindow" inherits="BenillaOptionsSliderRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowSpellQueue" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                                 <Anchor point="TOPRIGHT" relativeTo="$parentRowSpellQueue" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "SpellQueueWindow", "Spell Queue Window",
+                                                    "BENILLA_TOOLTIP_SPELL_QUEUE_WINDOW")
+                                                BenillaOptionsSliderRow_Setup(this, 0, 400, 10, "ms")
+                                            </OnLoad></Scripts>
+                                        </Frame>
+                                        <Frame name="$parentRowSpellQueueBuffer" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowSpellQueueWindow" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowSpellQueueWindow" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                             </Anchors>
                                             <Scripts><OnLoad>
                                                 BenillaOptionsRow_OnLoad(this, "spellQueueBufferMs", "Spell Queue Buffer",

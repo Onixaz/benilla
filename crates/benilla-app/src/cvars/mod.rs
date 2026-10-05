@@ -1515,6 +1515,10 @@ mod tests {
             crate::spell::inflight::SPELL_QUEUE_BUFFER_MS as f32
         );
         assert_eq!(
+            d["SpellQueueWindow"],
+            crate::spell::inflight::SPELL_QUEUE_WINDOW_MS as f32
+        );
+        assert_eq!(
             d["showLootSpam"] != 0.0,
             LootConfig::default().show_loot_spam
         );

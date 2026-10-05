@@ -376,6 +376,11 @@ fn send_spell_cast(
         return;
     }
     if pending.in_flight(now) {
+        // The spell queue holds a player's press for the guard's early open (benilla's own).
+        if hold.is_some_and(|press| pending.queue_behind_cast(press, now)) {
+            debug!("ui_action: cast {spell_id} queued behind the cast in flight");
+            return;
+        }
         // The already-casting refusal: the same spell bails silently (`6e4d43`), another errors
         // 0x61 "Another action is in progress" (`6e4d97`). The gate reads the in-flight record's
         // `Attributes & 0x404`, never the pressed spell's, and a guarding record is always an
@@ -511,6 +516,15 @@ fn send_spell_cast(
         CastCommit::Spell => 0,
     };
     if cooldowns.not_ready(spell_id, queried_item, def, now) {
+        // The spell queue holds a player's press for the end of a running cooldown or GCD; a
+        // parked record names no end (benilla's own).
+        let info = cooldowns.info(spell_id, queried_item, def, now);
+        let ends = now + std::time::Duration::from_millis(u64::from(info.remaining_ms));
+        if info.enabled && hold.is_some_and(|press| pending.queue_behind_cooldown(press, now, ends))
+        {
+            debug!("ui_action: cast {spell_id} queued behind its cooldown");
+            return;
+        }
         debug!("ui_action: cast {spell_id} refused locally — not ready (the validator's rung 1)");
         // The one packet a local refusal sends (`0x609576–0x60960f`, spell leg only): a running
         // repeat with AttributesEx3 0x400000 (wand Shoot) gets `CMSG_CANCEL_CAST`, then the local

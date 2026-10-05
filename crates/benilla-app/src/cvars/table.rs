@@ -227,6 +227,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "benilla's own — the spell queue's margin past the local cast end for the server's tick, \
          nampower's 55 ms default",
     ),
+    ours(
+        "SpellQueueWindow",
+        "400",
+        "a later client's name and default (the retail spell queue window): with spellQueue on, \
+         a press this many ms before a cast or cooldown ends is held and sent when it ends; 1.12 \
+         refuses it",
+    ),
     // The five saved camera views and the live index, at the reference's names and default strings;
     // owned by [`crate::player::camera_view`]. Registered so a `SaveView` persists.
     same(
