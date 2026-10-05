@@ -3,7 +3,7 @@
 A fork of [**benilla**](https://github.com/samwhosung/benilla), the from-scratch World of Warcraft 1.12.1
 client in Rust and Bevy by samwhosung. **[Read the original benilla README →](https://github.com/samwhosung/benilla/blob/main/README.md)**
 
-Upstream benilla tracks the 1.12.1 client exactly, so changes that go beyond it live here instead. This fork brings together its own work and work from other forks in four areas:
+Upstream benilla tracks the 1.12.1 client exactly, so changes that go beyond it are scattered across forks. This fork tries to bring them together in one place: work from other forks (credited in each section below) and its own, in four areas:
 
 1. **[Turtle WoW support](#turtle-wow-support)**: log in, create characters and play on Turtle WoW, including its races, auction house and transmog.
 2. **[Enhanced graphics](#enhanced-graphics)**: an optional modern look (shadows, modern fog, volumetric light, water, weather). The **Classic** preset keeps the original 1.12 image.
