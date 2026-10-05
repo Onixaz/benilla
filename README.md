@@ -65,9 +65,7 @@ each cast costs you a full round trip on top of its cast time. On 150 ms of late
 lost on every cast. Players have fixed this with [nampower](https://github.com/namreeb/nampower), a
 DLL injected into the game; benilla does the same thing natively.
 
-### More to come
 
-More quality-of-life features are planned like classic era addon support. Ideas and pull requests are welcome.
 
 ## Turtle WoW support
 
